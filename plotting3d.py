@@ -148,7 +148,7 @@ def mtz_comp(
         return anim
 
 
-def slice_3d(mtzdata, gif_name="", extent=None, startval=10, imkwargs={}):
+def slice_3d(mtzdata, gif_name="", extent=None, startval=10, is_diff=False):
     xlen, ylen, zlen = mtzdata.shape
     xline = np.linspace(0, 1, xlen)
     fig = plt.figure(figsize=(7, 6))
@@ -157,10 +157,15 @@ def slice_3d(mtzdata, gif_name="", extent=None, startval=10, imkwargs={}):
     plt.xlim(0, 1)
     plt.ylim(0, 1)
     extent = [1, 0, 0, 1] if extent is None else extent
-    imkwargs = {"cmap": "bwr", **imkwargs}
+    if is_diff:
+        vmax = np.max(np.abs(mtzdata))
+        imkwargs = {"cmap": "bwr",  "vmax":vmax, "vmin":-vmax}
+    else:
+        imkwargs ={}
     im = plt.imshow(mtzdata[startval], extent=extent, **imkwargs)
+    plt.colorbar(im)
     ax.legend(loc="center left", bbox_to_anchor=(1, 0.5))
-
+        
     @widgets.interact(f0=(0, len(xline) - 1, 1))
     def update(f0=0):
         im.set_data(mtzdata[f0])

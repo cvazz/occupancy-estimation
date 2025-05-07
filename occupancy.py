@@ -217,3 +217,18 @@ def x8_density_map_fdiff_norm(f_xtrs, mask_pks, obj0, fofo):
         peak_sum[ii] = np.abs((dens - obj0)[mask_pks]).sum() / np.abs(dens - obj0).sum()
 
     return peak_sum, real_CC
+
+def x8_density_map_fdiff_noisyf0(f_xtrs, mask_pks, obj0, fofo):
+    arrlen = len(f_xtrs)
+    peak_sum = np.empty((arrlen))
+    real_CC = np.empty((arrlen))
+    f0 = np.fft.fftn(obj0) 
+    noise = np.random.normal(size=obj0.shape) * np.mean(np.abs(f0)) 
+    obj_mod = np.fft.ifftn(f0+noise).real
+    
+    for ii, f_xtr in enumerate(f_xtrs):
+        dens = np.fft.ifftn(f_xtr).real
+        real_CC[ii] = pearsonr((dens - obj_mod).flatten(), fofo.flatten())[0]
+        peak_sum[ii] = np.abs((dens - obj_mod)[mask_pks]).sum() / np.abs(dens - obj0).sum()
+
+    return peak_sum, real_CC
