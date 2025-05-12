@@ -140,32 +140,30 @@ def mtz_comp(
                 d2_points[f0][0][boo == d2_mask[f0]],
             )
 
-    # return fig
     if gif_name != "":
         anim = animation.FuncAnimation(fig, update, frames=len(xline), interval=500)
         anim.save(gif_name)
         plt.show()
         return anim
+    return fig
 
 
-def slice_3d(mtzdata, gif_name="", extent=None, startval=10, is_diff=False):
+def slice_3d(mtzdata, gif_name="", extent=None, startval=10, is_diff=False, imkwargs={}, fig = None):
     xlen, ylen, zlen = mtzdata.shape
     xline = np.linspace(0, 1, xlen)
-    fig = plt.figure(figsize=(7, 6))
-    ax = fig.add_subplot()
+
+    fig = plt.figure(figsize=(7, 6)) 
+    ax = fig.gca()
     ax.set_title(xline[0])
     plt.xlim(0, 1)
     plt.ylim(0, 1)
     extent = [1, 0, 0, 1] if extent is None else extent
     if is_diff:
         vmax = np.max(np.abs(mtzdata))
-        imkwargs = {"cmap": "bwr",  "vmax":vmax, "vmin":-vmax}
-    else:
-        imkwargs ={}
+        imkwargs = imkwargs | {"cmap": "bwr",  "vmax":vmax, "vmin":-vmax}
     im = plt.imshow(mtzdata[startval], extent=extent, **imkwargs)
     plt.colorbar(im)
-    ax.legend(loc="center left", bbox_to_anchor=(1, 0.5))
-        
+
     @widgets.interact(f0=(0, len(xline) - 1, 1))
     def update(f0=0):
         im.set_data(mtzdata[f0])
@@ -176,6 +174,7 @@ def slice_3d(mtzdata, gif_name="", extent=None, startval=10, is_diff=False):
         anim.save(gif_name)
         plt.show()
         return anim
+    return fig
 
 
 def fname_variant(variant):

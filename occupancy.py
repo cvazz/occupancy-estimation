@@ -2,6 +2,7 @@ import numpy as np
 import matplotlib.pyplot as plt
 from scipy.stats import pearsonr
 from scipy import ndimage
+from scipy import stats
 import sys, os
 
 ################################################################################
@@ -118,7 +119,23 @@ def make_f_xtr(
             f_xtr = 2 / alphas * f_light
         case 4:
             pass
+    return f_xtr
 
+def make_f_xtr_phased(
+    alphas, f_dark, delta_f, noise_level=0, 
+):
+    f_dark_abs = np.abs(f_dark)
+    noise = np.random.normal(size=f_dark_abs.shape) * np.mean(f_dark_abs) * noise_level
+    delta_f_with_phase = delta_f + noise
+    many_none = (None,) * f_dark.ndim
+    f_xtr_abs = np.abs(
+        2 / alphas[(slice(None), *many_none)] * (delta_f)[None, ...]
+        + f_dark_abs[None, ...]
+    )
+    f_xtr = (
+        2 / alphas[(slice(None), *many_none)] * (delta_f_with_phase[None, ...])
+        + f_dark[None, ...]
+    )
     return f_xtr
 
 ################################################################################
@@ -166,6 +183,16 @@ def pandda(
 
 ######################## Negative Sum Explosion ################################
 
+def get_fits(neg_sum, alpha_invs, n_largest):
+    m_lowest = alpha_invs>alpha_invs[-n_largest]
+    m_biggest = alpha_invs<alpha_invs[n_largest]
+    res_lowest = stats.linregress(alpha_invs[m_lowest], -neg_sum[m_lowest])
+    res_biggest = stats.linregress(alpha_invs[m_biggest], -neg_sum[m_biggest])
+    alpha_line = np.linspace(np.min(alpha_invs), np.max(alpha_invs),5,)
+    fit_lowest =  res_lowest.intercept+res_lowest.slope*alpha_line
+    fit_biggest =  res_biggest.intercept+res_biggest.slope*alpha_line
+    return  alpha_line, fit_lowest, fit_biggest    
+
 def marius(f_xtrs):
     arrlen = len(f_xtrs)
     neg_sum = np.empty((arrlen))
@@ -178,18 +205,35 @@ def marius(f_xtrs):
         pos_sum[ii] = np.sum(dens[dens > 0])
     return densities, neg_sum
 
+def marius_masked(f_xtrs, mask_pks):
+    arrlen = len(f_xtrs)
+    neg_sum = np.empty((arrlen))
+    densities = np.empty(f_xtrs.shape)
+    for ii, f_xtr in enumerate(f_xtrs):
+        dens = np.fft.ifftn(f_xtr).real
+        densities[ii] = dens
+        dens = dens[mask_pks]
+        neg_sum[ii] = np.sum(dens[dens < 0])
+    return densities, neg_sum
+
 
 ############################### Xtrapol8 #######################################
 
-def x8_density_map_f1(f_xtrs, mask_pks, fofo, obj0):
+def x8_density_map_f1(f_xtrs, mask_pks, fofo, obj0, posneg=False):
     arrlen = len(f_xtrs)
     peak_sum = np.empty((arrlen))
     real_CC = np.empty((arrlen))
+    peak_pos = np.empty((arrlen))
+    peak_neg = np.empty((arrlen))
     for ii, f_xtr in enumerate(f_xtrs):
         dens = np.fft.ifftn(f_xtr).real
         real_CC[ii] = pearsonr(dens.flatten(), obj0.flatten())[0]
-        peak_sum[ii] = np.abs(dens[mask_pks]).sum() / np.abs(dens).sum()
-        # peak_sum[ii] = np.abs(dens[mask_pks]).sum()/np.abs(fofo[mask_pks]).sum()
+        dens_mask = dens[mask_pks]
+        peak_sum[ii] = np.abs(dens_mask).sum() / np.abs(dens).sum()
+        peak_pos[ii] = ((dens_mask[dens_mask>0])).sum() / dens[dens>0].sum()
+        peak_neg[ii] = ((dens_mask[dens_mask<0])).sum() / dens[dens<0].sum()
+    if posneg:
+        return peak_sum, real_CC, peak_pos, peak_neg
     return peak_sum, real_CC
 
 
@@ -200,23 +244,50 @@ def x8_density_map_fdiff(f_xtrs, mask_pks, obj0, fofo):
     for ii, f_xtr in enumerate(f_xtrs):
         dens = np.fft.ifftn(f_xtr).real
         real_CC[ii] = pearsonr((dens - obj0).flatten(), fofo.flatten())[0]
-        peak_sum[ii] = np.abs((dens - obj0)[mask_pks]).sum() / np.abs(dens - obj0).sum()
+        diff = dens - obj0
+        peak_sum[ii] = np.abs(diff[mask_pks]).sum() / np.abs(diff).sum()
 
     return peak_sum, real_CC
 
 
-def x8_density_map_fdiff_norm(f_xtrs, mask_pks, obj0, fofo):
+def x8_density_map_fdiff_norm(f_xtrs, mask_pks, obj0, fofo, inspect=False, posneg=False):
     arrlen = len(f_xtrs)
     peak_sum = np.empty((arrlen))
     real_CC = np.empty((arrlen))
+    peak_pos = np.empty((arrlen))
+    peak_neg = np.empty((arrlen))
+    fract = np.empty((arrlen))
+    obj0max = np.max(obj0)
     obj0 = obj0 / np.max(obj0)
     for ii, f_xtr in enumerate(f_xtrs):
         dens = np.fft.ifftn(f_xtr).real
-        dens = dens / np.max(dens)
+        densmax = np.max(dens)
+        diff = dens / np.max(dens) - obj0
+        diff_mask = diff[mask_pks]
+        fract[ii] = densmax/obj0max
+        real_CC[ii] = pearsonr(diff.flatten(), fofo.flatten())[0]
+        peak_sum[ii] = np.abs(diff_mask).sum() / np.abs(diff).sum()
+        peak_pos[ii] = np.abs(diff_mask[diff_mask>0]).sum() / np.abs(diff[diff>0]).sum()
+        peak_neg[ii] = np.abs(diff_mask[diff_mask<0]).sum() / np.abs(diff[diff<0]).sum()
+
+    if posneg:
+        return peak_sum, real_CC, peak_pos, peak_neg
+    if inspect:
+        return peak_sum, real_CC, fract
+    return peak_sum, real_CC
+
+def x8_density_map_fdiff_factor(f_xtrs, mask_pks, obj0, fofo, fact = 0.99):
+    arrlen = len(f_xtrs)
+    peak_sum = np.empty((arrlen))
+    real_CC = np.empty((arrlen))
+    obj0 = obj0 
+    for ii, f_xtr in enumerate(f_xtrs):
+        dens = np.fft.ifftn(f_xtr).real
+        dens = dens * fact
         real_CC[ii] = pearsonr((dens - obj0).flatten(), fofo.flatten())[0]
         peak_sum[ii] = np.abs((dens - obj0)[mask_pks]).sum() / np.abs(dens - obj0).sum()
-
     return peak_sum, real_CC
+
 
 def x8_density_map_fdiff_noisyf0(f_xtrs, mask_pks, obj0, fofo):
     arrlen = len(f_xtrs)
