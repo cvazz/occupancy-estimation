@@ -303,3 +303,175 @@ def x8_density_map_fdiff_noisyf0(f_xtrs, mask_pks, obj0, fofo):
         peak_sum[ii] = np.abs((dens - obj_mod)[mask_pks]).sum() / np.abs(dens - obj0).sum()
 
     return peak_sum, real_CC
+
+
+############################### my way #########################################
+def root_finding(f_xtrs, alpha_xtrs):
+    """
+    finds all densities that
+    """
+    dens_xtrs = np.array([np.fft.ifftn(f_xtr).real for f_xtr in f_xtrs])
+    changing_at = np.ones(dens_xtrs.shape[1:]) * -1
+    adiff = np.diff(alpha_xtrs)  # determine whether counting up or down
+    assert (np.sign(adiff) == np.sign(adiff)[0]).all()
+    assert np.sign(adiff)[0] != 0
+    counting_order = slice(None, None, int(np.sign(adiff[0])))
+    all_negs = np.argwhere(dens_xtrs < 0)
+    for all_neg in all_negs[counting_order]:
+        best, index = all_neg[0], all_neg[1:]
+        changing_at[tuple(index)] = alpha_xtrs[best]
+    return changing_at
+
+
+def root_finding2(f_xtrs, alpha_xtrs):
+    """
+    finds all densities that
+    """
+    dens_xtrs = np.array([np.fft.ifftn(f_xtr).real for f_xtr in f_xtrs])
+    changing_at = np.ones(dens_xtrs.shape[1:]) * np.nan
+    adiff = np.diff(alpha_xtrs)  # determine whether counting up or down
+    assert (np.sign(adiff) == np.sign(adiff)[0]).all()
+    assert np.sign(adiff)[0] != 0
+    counting_order = slice(None, None, int(np.sign(adiff[0])))
+    only_with_change = np.sign(dens_xtrs[0]) != np.sign(dens_xtrs[-1])
+    # only_with_change = np.stack([only_with_change for _ in range(len(dens_xtrs))],axis=0)
+    changing_at = np.ones(np.sum(only_with_change)) * np.nan
+    # all_negs = np.argwhere([only_with_change]<0)
+    for ii, dens_xtr in enumerate(dens_xtrs[counting_order]):
+        # best, index = all_neg[0], all_neg[1:]
+        indices = np.argwhere(dens_xtr[only_with_change] < 0)
+        for index in indices:
+            changing_at[tuple(index)] = alpha_xtrs[ii]
+    return changing_at
+
+
+def root_finding_blobs(f_xtrs, alpha_xtrs, mask_pks_neg):
+    dens_xtrs = np.array([np.fft.ifftn(f_xtr).real for f_xtr in f_xtrs])
+    blobs, blob_number = ndimage.label(mask_pks_neg)
+    adiff = np.diff(alpha_xtrs)  # determine whether counting up or down
+    assert (np.sign(adiff) == np.sign(adiff)[0]).all()
+    assert np.sign(adiff)[0] != 0
+    counting_order = slice(None, None, int(np.sign(adiff[0])))
+    integrated_peaks = np.empty((len(dens_xtrs), blob_number))
+    for dens_id, dens_xtr in enumerate(dens_xtrs):
+        for blob_id in range(blob_number):
+            integrated_peaks[dens_id, blob_id] = np.sum(dens_xtr[blobs == blob_id + 1])
+    # print(integrated_peaks)
+    all_negs = np.argwhere(integrated_peaks < 0)
+    changing_at = np.ones(blob_number) * -1
+    for all_neg in all_negs[counting_order]:
+        best, index = all_neg[0], all_neg[1:]
+        changing_at[tuple(index)] = alpha_xtrs[best]
+    return changing_at
+
+
+def root_finding_blobs2(f_xtrs, alpha_xtrs, mask_pks_neg):
+    dens_xtrs = np.array([np.fft.ifftn(f_xtr).real for f_xtr in f_xtrs])
+    blobs, blob_number = ndimage.label(mask_pks_neg)
+    adiff = np.diff(alpha_xtrs)  # determine whether counting up or down
+    assert (np.sign(adiff) == np.sign(adiff)[0]).all()
+    assert np.sign(adiff)[0] != 0
+    counting_order = slice(None, None, int(np.sign(adiff[0])))
+    integrated_peaks = np.empty((len(dens_xtrs), blob_number))
+    for dens_id, dens_xtr in enumerate(dens_xtrs):
+        for blob_id in range(blob_number):
+            integrated_peaks[dens_id, blob_id] = np.sum(dens_xtr[blobs == blob_id + 1])
+    # print(integrated_peaks)
+    # all_negs = np.argwhere(integrated_peaks<0)
+    # changing_at = np.ones(blob_number)*-1
+    # for all_neg in all_negs[counting_order]:
+    #     best, index = all_neg[0], all_neg[1:]
+    #     changing_at[tuple(index)] = alpha_xtrs[best]
+    only_with_change = np.sign(integrated_peaks[0]) != np.sign(integrated_peaks[-1])
+    changing_at = np.ones(np.sum(only_with_change)) * np.nan
+    for ii, int_pks in enumerate(integrated_peaks[counting_order]):
+        indices = np.argwhere(int_pks[only_with_change] < 0)
+        for index in indices:
+            changing_at[tuple(index)] = alpha_xtrs[counting_order][ii]
+    return changing_at
+
+
+############################### my way #########################################
+def root_finding(f_xtrs, alpha_xtrs):
+    """
+    finds all densities that
+    """
+    dens_xtrs = np.array([np.fft.ifftn(f_xtr).real for f_xtr in f_xtrs])
+    changing_at = np.ones(dens_xtrs.shape[1:]) * -1
+    adiff = np.diff(alpha_xtrs)  # determine whether counting up or down
+    assert (np.sign(adiff) == np.sign(adiff)[0]).all()
+    assert np.sign(adiff)[0] != 0
+    counting_order = slice(None, None, int(np.sign(adiff[0])))
+    all_negs = np.argwhere(dens_xtrs < 0)
+    for all_neg in all_negs[counting_order]:
+        best, index = all_neg[0], all_neg[1:]
+        changing_at[tuple(index)] = alpha_xtrs[best]
+    return changing_at
+
+
+def root_finding2(f_xtrs, alpha_xtrs):
+    """
+    finds all densities that
+    """
+    dens_xtrs = np.array([np.fft.ifftn(f_xtr).real for f_xtr in f_xtrs])
+    changing_at = np.ones(dens_xtrs.shape[1:]) * np.nan
+    adiff = np.diff(alpha_xtrs)  # determine whether counting up or down
+    assert (np.sign(adiff) == np.sign(adiff)[0]).all()
+    assert np.sign(adiff)[0] != 0
+    counting_order = slice(None, None, int(np.sign(adiff[0])))
+    only_with_change = np.sign(dens_xtrs[0]) != np.sign(dens_xtrs[-1])
+    # only_with_change = np.stack([only_with_change for _ in range(len(dens_xtrs))],axis=0)
+    changing_at = np.ones(np.sum(only_with_change)) * np.nan
+    # all_negs = np.argwhere([only_with_change]<0)
+    for ii, dens_xtr in enumerate(dens_xtrs[counting_order]):
+        # best, index = all_neg[0], all_neg[1:]
+        indices = np.argwhere(dens_xtr[only_with_change] < 0)
+        for index in indices:
+            changing_at[tuple(index)] = alpha_xtrs[ii]
+    return changing_at
+
+
+def root_finding_blobs(f_xtrs, alpha_xtrs, mask_pks_neg):
+    dens_xtrs = np.array([np.fft.ifftn(f_xtr).real for f_xtr in f_xtrs])
+    blobs, blob_number = ndimage.label(mask_pks_neg)
+    adiff = np.diff(alpha_xtrs)  # determine whether counting up or down
+    assert (np.sign(adiff) == np.sign(adiff)[0]).all()
+    assert np.sign(adiff)[0] != 0
+    counting_order = slice(None, None, int(np.sign(adiff[0])))
+    integrated_peaks = np.empty((len(dens_xtrs), blob_number))
+    for dens_id, dens_xtr in enumerate(dens_xtrs):
+        for blob_id in range(blob_number):
+            integrated_peaks[dens_id, blob_id] = np.sum(dens_xtr[blobs == blob_id + 1])
+    # print(integrated_peaks)
+    all_negs = np.argwhere(integrated_peaks < 0)
+    changing_at = np.ones(blob_number) * -1
+    for all_neg in all_negs[counting_order]:
+        best, index = all_neg[0], all_neg[1:]
+        changing_at[tuple(index)] = alpha_xtrs[best]
+    return changing_at
+
+
+def root_finding_blobs2(f_xtrs, alpha_xtrs, mask_pks_neg):
+    dens_xtrs = np.array([np.fft.ifftn(f_xtr).real for f_xtr in f_xtrs])
+    blobs, blob_number = ndimage.label(mask_pks_neg)
+    adiff = np.diff(alpha_xtrs)  # determine whether counting up or down
+    assert (np.sign(adiff) == np.sign(adiff)[0]).all()
+    assert np.sign(adiff)[0] != 0
+    counting_order = slice(None, None, int(np.sign(adiff[0])))
+    integrated_peaks = np.empty((len(dens_xtrs), blob_number))
+    for dens_id, dens_xtr in enumerate(dens_xtrs):
+        for blob_id in range(blob_number):
+            integrated_peaks[dens_id, blob_id] = np.sum(dens_xtr[blobs == blob_id + 1])
+    # print(integrated_peaks)
+    # all_negs = np.argwhere(integrated_peaks<0)
+    # changing_at = np.ones(blob_number)*-1
+    # for all_neg in all_negs[counting_order]:
+    #     best, index = all_neg[0], all_neg[1:]
+    #     changing_at[tuple(index)] = alpha_xtrs[best]
+    only_with_change = np.sign(integrated_peaks[0]) != np.sign(integrated_peaks[-1])
+    changing_at = np.ones(np.sum(only_with_change)) * np.nan
+    for ii, int_pks in enumerate(integrated_peaks[counting_order]):
+        indices = np.argwhere(int_pks[only_with_change] < 0)
+        for index in indices:
+            changing_at[tuple(index)] = alpha_xtrs[counting_order][ii]
+    return changing_at
