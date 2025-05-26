@@ -1,5 +1,6 @@
 import numpy as np
 import matplotlib.pyplot as plt
+from occupancy import *
 
 try:
     import ipywidgets as widgets
@@ -140,32 +141,32 @@ def mtz_comp(
                 d2_points[f0][0][boo == d2_mask[f0]],
             )
 
-    # return fig
     if gif_name != "":
         anim = animation.FuncAnimation(fig, update, frames=len(xline), interval=500)
         anim.save(gif_name)
         plt.show()
         return anim
+    return fig
 
 
-def slice_3d(mtzdata, gif_name="", extent=None, startval=10, is_diff=False):
+def slice_3d(
+    mtzdata, gif_name="", extent=None, startval=10, is_diff=False, imkwargs={}, fig=None
+):
     xlen, ylen, zlen = mtzdata.shape
     xline = np.linspace(0, 1, xlen)
+
     fig = plt.figure(figsize=(7, 6))
-    ax = fig.add_subplot()
+    ax = fig.gca()
     ax.set_title(xline[0])
     plt.xlim(0, 1)
     plt.ylim(0, 1)
     extent = [1, 0, 0, 1] if extent is None else extent
     if is_diff:
         vmax = np.max(np.abs(mtzdata))
-        imkwargs = {"cmap": "bwr",  "vmax":vmax, "vmin":-vmax}
-    else:
-        imkwargs ={}
+        imkwargs = imkwargs | {"cmap": "bwr", "vmax": vmax, "vmin": -vmax}
     im = plt.imshow(mtzdata[startval], extent=extent, **imkwargs)
     plt.colorbar(im)
-    ax.legend(loc="center left", bbox_to_anchor=(1, 0.5))
-        
+
     @widgets.interact(f0=(0, len(xline) - 1, 1))
     def update(f0=0):
         im.set_data(mtzdata[f0])
@@ -176,18 +177,23 @@ def slice_3d(mtzdata, gif_name="", extent=None, startval=10, is_diff=False):
         anim.save(gif_name)
         plt.show()
         return anim
+    return fig
 
 
 def fname_variant(variant):
     match variant:
-        case "basic":
+        case "basic" | "cistrans_nonoise":
             fname = "cistrans"
         case "basic-alt":
             fname = "cistrans_alt"
-        case "noise":
+        case "noise" | "cistrans_noise":
             fname = "cistrans_noise"
         case "realmeteor":
             fname = "realmeteor"
+        case _:
+            print("using the following for plot name:", end="")
+            print(variant)
+            fname = variant
     return fname
 
 
@@ -256,7 +262,7 @@ def show_xtrs(
         for dens, imo in zip(dens_mod, ims):
             imo.set_data(dens[f0])
         alpha_info = "\t " + r"$\alpha_{true}" + f"={alpha}$" if alpha else ""
-        fig.suptitle(title + alpha_info + "\t z={f0}/{imlen-1}", fontsize=16)
+        fig.suptitle(title + alpha_info + f"\t z={f0}/{imlen-1}", fontsize=16)
 
     if make_gif:
         interval = make_gif if not isinstance(make_gif, int) else 1000
@@ -362,5 +368,276 @@ def direct_comp(
         return anim
 
 
+########################### Master Section #####################################
+
+
+def add_fit(neg_sum, alpha_invs, n_largest, kwargs={}):
+    kwargs = {"linestyle": "--", "alpha": 0.5} | {}
+    alpha_line, fit_biggest1, fit_lowest1 = get_fits(neg_sum, alpha_invs, n_largest)
+    plt.plot(
+        alpha_line, fit_lowest1, **kwargs, c="red", label=f"Fit (largest {n_largest})"
+    )
+    plt.plot(
+        alpha_line, fit_biggest1, **kwargs, c="g", label=f"Fit (smallest {n_largest})"
+    )
+
+
+def neg_sum_explosion(alpha_invs, neg_sum, config, n_largest=0, n_more=0, title=""):
+    # alpha_line, fit_biggest2, fit_lowest2 = get_fits(neg_sum, alpha_invs, n_more)
+
+    fig = plt.figure()
+    plt.axvline(2 / config.alpha, c="k", linestyle="-.", label="2/alpha_true")
+    if n_largest:
+        add_fit(neg_sum, alpha_invs, n_largest)
+    if n_more:
+        add_fit(neg_sum, alpha_invs, n_more, kwargs={"linestyle": ".-"})
+
+    plt.plot(alpha_invs, neg_sum * -1, "x")  # label="Datapoint")
+    plt.legend()
+    plt.xlabel("Inverse Occupancy")
+    plt.ylabel(r"$\sum$ $|$neg. density$|$")
+    plt.title(title)
+    fname = "negsumexplosion"
+    savefig(fig, config, fname)
+
+
+def diffmap_versions(display_tup, alpha_xtrs, f_xtrs, mask_pks, obj0, delta_obj):
+    display = {}
+
+    dname = "fxtr"
+    if dname in display_tup:
+        display["fxtr"] = {"label": r"$F_{xtr}$ ", "color": "green"}
+        out = x8_density_map_f1(f_xtrs, mask_pks, obj0, delta_obj)
+        display[dname]["peak_sum"], display[dname]["real_CC"] = out
+
+    dname = "fdiff"
+    if dname in display_tup:
+        display["fdiff"] = {"label": r"$F_{xtr}-F_0$", "color": "brown"}
+        out = x8_density_map_fdiff(f_xtrs, mask_pks, obj0, delta_obj)
+        display[dname]["peak_sum"], display[dname]["real_CC"] = out
+
+    dname = "fconst"
+    if dname in display_tup:
+        display["fconst"] = {"label": r"$F_{xtr}-F_{0}+\mathcal N$", "color": "orange"}
+        obj0_star = obj0 + np.random.normal(0, 0.1, size=obj0.shape) * obj0
+        out = x8_density_map_fdiff(f_xtrs, mask_pks, obj0_star, delta_obj)
+        display[dname]["peak_sum"], display[dname]["real_CC"] = out
+
+    dname = "fmax"
+    if dname in display_tup:
+        display["fmax"] = {"label": r"norm($F_{xtr}$)-norm($F_0$)", "color": "blue"}
+        out = x8_density_map_fdiff_norm(f_xtrs, mask_pks, obj0, delta_obj)
+        display[dname]["peak_sum"], display[dname]["real_CC"] = out
+
+    dname = "diffalpha"
+    if dname in display_tup:
+        display["diffalpha"] = {"label": r"$F_{xtr}-\mu(\alpha)F_0$", "color": "teal"}
+        out = x8_density_map_fdiff_alpha(f_xtrs, mask_pks, obj0, delta_obj, alpha_xtrs)
+        display[dname]["peak_sum"], display[dname]["real_CC"] = out
+    return display
+
+
+def difference_map_plot(
+    alpha_xtrs,
+    f_xtrs,
+    mask_pks,
+    obj0,
+    delta_obj,
+    config,
+    display_tup=None,
+    save_output=False,
+):
+    default_tup = ("fxtr", "fdiff", "diffalpha", "fconst", "fmax")
+    display_tup = default_tup if display_tup is None else display_tup
+    display = diffmap_versions(
+        display_tup, alpha_xtrs, f_xtrs, mask_pks, obj0, delta_obj
+    )
+
+    fig, axs = plt.subplots(2, 2, figsize=(8, 8), tight_layout=True)
+    for ax in axs[0]:
+        ax.set_ylabel("Ratio prominent over all peaks")
+        ax.set_title("Difference Map Method")
+
+    for ax in axs[:, 0]:
+        ax.axvline(1 / config.alpha, c="k", linestyle="-.", label="alpha_true")
+
+    for ax in axs[:, 1]:
+        ax.axvline(config.alpha, c="k", linestyle="-.", label="alpha_true")
+
+    for ax in axs[1]:
+        ax.axhline( 0, c="k", linewidth=0.5)
+        ax.set_ylabel("Cross Correlation")
+        ax.set_xlabel("Alphas")
+        ax.set_title("Difference Map (CC) Method")
+
+    alpha_inv = 1 / alpha_xtrs
+    for disp in display.values():
+        ax = axs[0, 0]
+        ax.plot(alpha_inv, disp["peak_sum"], label=disp["label"], color=disp["color"])
+        ax = axs[0, 1]
+        ax.plot(alpha_xtrs, disp["peak_sum"], label=disp["label"], color=disp["color"])
+        ax = axs[1, 0]
+        ax.plot(alpha_inv, disp["real_CC"], label=disp["label"], color=disp["color"])
+        ax = axs[1, 1]
+        ax.plot(alpha_xtrs, disp["real_CC"], label=disp["label"], color=disp["color"])
+
+    ax = axs[0, 0]
+    ax.legend()
+
+    ax = axs[1, 0]
+    ax.set_xlabel("1/occupancy")
+
+    ax = axs[1, 1]
+    ax.set_xlabel("occupancy")
+
+    fname = "differencemap"
+    if save_output:
+        savefig(fig, config, fname)
+
+
+def pandda_bin_comp(delta_obj, strict, lax, config):
+    bins = np.logspace(-6, 0, 100)
+    bins = np.concatenate([[0], bins])
+    fig = plt.figure()
+    plt.hist(delta_obj.flatten(), bins=bins)
+    plt.axvline(strict, label="narrow", color="r")
+    plt.axvline(lax, label="wide", color="g")
+    plt.legend()
+    plt.xscale("log")
+    plt.yscale("log")
+    plt.xlabel(r"Value Distribution $\Delta \rho$")
+    plt.ylabel("Frequency")
+    fname = "pandda_bins"
+    savefig(fig, config, fname)
+
+
+def pandda_plot(alpha_xtrs, f_xtrs, f_dark, mask_pks_lax, mask_pks_strict, config):
+    mean_local_strict, mean_global_strict = pandda(f_dark, f_xtrs, mask_pks_strict)
+    mean_local_lax, mean_global_lax = pandda(f_dark, f_xtrs, mask_pks_lax)
+    ml = [mean_local_strict, mean_local_lax]
+    mg = [mean_global_strict, mean_global_lax]
+    titles = ["narrow mask", "wide mask"]
+
+    fig, axso = plt.subplots(2, 2, sharex=True, tight_layout=True)
+    for axs, mean_local, mean_global, title in zip(axso.T, ml, mg, titles):
+        ax = axs[0]
+        ax.set_title(title)
+        ax.axvline(
+            config.alpha,
+            c="k",
+            linestyle="-.",
+        )
+        ax.plot(alpha_xtrs, +mean_global - mean_local, label="global-local")
+        ax.set_ylabel("$\\Delta$ Cross correlation")
+        ax.legend()
+        ax = axs[1]
+        ax.axvline(
+            config.alpha,
+            c="k",
+            linestyle="-.",
+        )
+        ax.axhline(0, c="k", linestyle="--")
+        ax.plot(alpha_xtrs, mean_local, label="local")
+        ax.plot(alpha_xtrs, mean_global, label="global")
+        ax.set_xlabel("Occupancy")
+        ax.set_ylabel("Cross correlation with $F_0$")
+        ax.legend()
+        # ax = axs[2]
+        # # ax.axvline(alpha/2,c="k", linestyle="-", label="1/2*alpha_true")
+        # ax.axvline(alpha,c="k", linestyle="-.", label="alpha_true")
+        # # ax.axvline(alpha*2,c="k", linestyle="--", label="2*alpha_true")
+        # ax.plot(alpha_xtrs,+np.gradient(mean_global-mean_local), label="global-local")
+        # ax.legend()
+
+    fig.suptitle("PanDDA method")
+    fname = "pandda"
+    savefig(fig, config, fname)
+
+
+def plot_density_match(ou1, config, title, fname):
+    fig = plt.figure()
+    bins = np.arange(0, 1, 0.01)
+    vals, _, _ = plt.hist(ou1, alpha=0.5, density=True, bins=bins)
+    plt.axvline(config.alpha, color="black", linestyle="--", label="True Occupancy")
+    plt.axvline(np.mean(ou1), color="green", linestyle="-.", label="Mean")
+    plt.axvline(np.median(ou1), color="blue", linestyle="--", label="Median")
+    plt.legend()
+    plt.ylabel("Frequency")
+    plt.xlabel("Occupancy")
+    plt.title(title)
+    savefig(fig, config, fname)
+
+
+def savefig(fig, config, fname):
+    for ending, folder in zip([".png", ".pdf"], get_fig_folders()):
+        loc = folder + fname_variant(config.imagetype)
+        final_file_name = loc + "_" + fname + ending
+        print(final_file_name)
+        fig.savefig(final_file_name, bbox_inches="tight")
+
+
+def density_matching(f_xtrs, alpha_xtrs, mask_pks_neg, config):
+    root_blobs = root_finding_blobs(f_xtrs, alpha_xtrs, mask_pks_neg)
+    root_voxel_3d = root_finding(f_xtrs, alpha_xtrs)
+    root_voxel = root_voxel_3d[mask_pks_neg]
+    # plt.figure()
+    # plt.plot(1/alpha_xtrs,np.sum(f_xtrs[mask_pks_neg],axis=1))
+    # plt.show()
+    plot_density_match(
+        root_blobs, config, "Density Matching (Blobs)", "density_matching_blobs"
+    )
+    plot_density_match(
+        root_voxel, config, "Density Matching (Voxel)", "density_matching_voxel"
+    )
+
+
+from dataclasses import dataclass
+
+
+@dataclass
+class Config:
+    imagetype: str
+    alpha: float
+
+
+def make_the_plots():
+    imagetype = "cistrans_noise"
+
+    obj0, obj1, f_dark, f_light, delta_fa_abs, alpha = generate_obj(
+        imagetype, kwargs={}
+    )
+    config = Config(imagetype, alpha)
+    if False:
+        alpha_xtrs_vis = np.array([1, alpha * 2, alpha, alpha / 2, 0.19, 0.01])
+        f_xtrs_vis = make_f_xtr(
+            alpha_xtrs_vis, f_dark, f_light, np.angle(f_dark), version=1, noise_level=0
+        )
+        dens_xtrs_vis = [np.fft.ifftn(f_xtr).real for f_xtr in f_xtrs_vis]
+        anim = show_xtrs(
+            dens_xtrs_vis,
+            alpha_xtrs_vis,
+            obj0,
+            alpha,
+            version="only",
+            variant=imagetype,
+            make_gif=False,
+        )
+    title = "Negative Sum Explosion"
+
+    alpha_invs = np.arange(0, 20) + 1e-10
+    alpha_xtrs = 2 / alpha_invs
+    f_xtrs = make_f_xtr(
+        alpha_xtrs, f_dark, f_light, np.angle(f_dark), version=1, noise_level=0
+    )
+    _, neg_sum = marius(f_xtrs)
+    n_largest = 9
+    n_more = 3
+    neg_sum_explosion(alpha_invs, neg_sum, config, n_largest, n_more, title=title)
+
+
 def main():
-    pass
+    make_the_plots()
+
+
+if __name__ == "__main__":
+    main()

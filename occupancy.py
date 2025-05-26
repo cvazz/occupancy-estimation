@@ -2,11 +2,26 @@ import numpy as np
 import matplotlib.pyplot as plt
 from scipy.stats import pearsonr
 from scipy import ndimage
+from scipy import stats
 import sys, os
+
+try:
+    import reciprocalspaceship as rs
+except ImportError:
+    print("reciprocalspaceship not available")
+
+# import gemmi
+
 
 ################################################################################
 ######################### Data preparation #####################################
 ################################################################################
+def get_fig_folders():
+    return [
+        "plots/",
+        "../tex/figs/",
+    ]
+
 
 def make_objs(
     nx=256,
@@ -79,6 +94,80 @@ def make_working_vars(obj1, obj0, alpha, old_version=False):
     return f0, f1a, delta_fa_abs
 
 
+def generate_obj_cistrans(imagetype, mean_value_offset=0):
+    dataloc = "../synthetic_cistrans/"
+    match imagetype:
+        case "cistrans_nonoise":
+            name_dark = "trans_sf.mtz"
+            name_light = "100ps_sf.mtz"
+            alpha = 0.27
+        case "cistrans_noise":
+            name_light = "100ps_withSIGFC_amplitudenoise.mtz"
+            name_dark = "trans_withSIGFC_amplitudenoise.mtz"
+            alpha = 0.27
+        case "cistrans_little":
+            name_light = "100ps_noise3.mtz"
+            name_dark = "trans_noise3.mtz"
+            alpha = 0.27
+    ds_light = rs.read_mtz(dataloc + name_light)
+    ds_dark = rs.read_mtz(dataloc + name_dark)
+
+    if imagetype in ["cistrans_little"]:
+        ds_light["sf"] = ds_light.to_structurefactor("F_on", "PHI_on")
+        ds_dark["sf"] = ds_dark.to_structurefactor("F_k", "PHI_k")
+    else:
+        ds_light["sf"] = ds_light.to_structurefactor("FC", "PHIC")
+        ds_dark["sf"] = ds_dark.to_structurefactor("FC", "PHIC")
+
+    f_light = ds_light.to_reciprocal_grid("sf")
+    f_dark = ds_dark.to_reciprocal_grid("sf")
+    delta_fa_abs = np.abs(f_light) - np.abs(f_dark)
+
+    if mean_value_offset:
+        obj1 = np.real(np.fft.ifftn(f_light))
+        obj0 = np.real(np.fft.ifftn(f_dark))
+        minobj1 = np.min(obj1)
+        if minobj1<0:
+            obj0-=minobj1
+            obj1-=minobj1
+        f_dark = np.fft.fftn(obj0)
+        f_light = np.fft.fftn(obj1)
+
+    else:
+        obj1 = np.real(np.fft.ifftn(f_light))
+        obj0 = np.real(np.fft.ifftn(f_dark))
+    if False:
+        f_light[0, 0, 0] += mean_value_offset
+        f_dark[0, 0, 0] += mean_value_offset
+
+    return obj0, obj1, f_dark, f_light, delta_fa_abs, alpha
+
+
+def generate_obj(imagetype, kwargs={}):
+    if imagetype == "2d":
+        alpha = 0.3 if not "alpha" in kwargs.keys() else kwargs["alpha"]
+        obj1, obj0 = make_objs(
+            n_pos=50, blur_by=5, delta_x=-7, delta_y=7, seed=4
+        )  # simpler image
+        f_dark, f_light, delta_fa_abs = make_working_vars(
+            obj1, obj0, alpha, old_version=False
+        )
+        return obj0, obj1, f_dark, f_light, delta_fa_abs, alpha
+    elif "cistrans" in imagetype:
+        mean_value_offset = (
+            0.3
+            if not "mean_value_offset" in kwargs.keys()
+            else kwargs["mean_value_offset"]
+        )
+        if "offset" in imagetype:
+            mean_value_offset= 90_000 
+            imagevariant = imagetype[:-7]
+        else:
+            mean_value_offset = 0
+            imagevariant = imagetype
+        return generate_obj_cistrans(imagevariant, mean_value_offset)
+
+
 
 def make_f_xtr(
     alphas, f_dark, f_light, f_angle, version, noise_level=0, poisson_noise=-1
@@ -118,8 +207,20 @@ def make_f_xtr(
             f_xtr = 2 / alphas * f_light
         case 4:
             pass
-
     return f_xtr
+
+
+def make_f_xtr_phased(alphas, f_dark, delta_f, noise_level=0):
+    f_dark_abs = np.abs(f_dark)
+    noise = np.random.normal(size=f_dark_abs.shape) * np.mean(f_dark_abs) * noise_level
+    delta_f_with_phase = delta_f + noise
+    many_none = (None,) * f_dark.ndim
+    f_xtr = (
+        1 / alphas[(slice(None), *many_none)] * (delta_f_with_phase[None, ...])
+        + f_dark[None, ...]
+    )
+    return f_xtr
+
 
 ################################################################################
 ############################## Processing ######################################
@@ -132,6 +233,7 @@ def comp_cc(f_xtra, f_dark, f_light):
     out = pearsonr(delta_meas.flatten(), delta_xtra.flatten())
     return out[0]
 
+
 def x8_inspired(
     f_dark,
     f_light,
@@ -142,7 +244,9 @@ def x8_inspired(
         corrs[ii] = comp_cc(f_xtr, f_dark, f_light)
     return corrs
 
+
 ################################ PanDDA ########################################
+
 
 def pandda(
     f_dark,
@@ -166,30 +270,66 @@ def pandda(
 
 ######################## Negative Sum Explosion ################################
 
-def marius(f_xtrs):
+
+def get_fits(neg_sum, alpha_invs, n_largest):
+    m_lowest = alpha_invs > alpha_invs[-n_largest]
+    m_biggest = alpha_invs < alpha_invs[n_largest]
+    res_lowest = stats.linregress(alpha_invs[m_lowest], -neg_sum[m_lowest])
+    res_biggest = stats.linregress(alpha_invs[m_biggest], -neg_sum[m_biggest])
+    alpha_line = np.linspace(
+        np.min(alpha_invs),
+        np.max(alpha_invs),
+        5,
+    )
+    fit_lowest = res_lowest.intercept + res_lowest.slope * alpha_line
+    fit_biggest = res_biggest.intercept + res_biggest.slope * alpha_line
+    return alpha_line, fit_lowest, fit_biggest
+
+
+def marius(f_xtrs, mask=None):
+    mask = np.ones(f_xtrs.shape[1:], bool) if mask is None else mask
     arrlen = len(f_xtrs)
     neg_sum = np.empty((arrlen))
-    pos_sum = np.empty((arrlen))
     densities = np.empty(f_xtrs.shape)
     for ii, f_xtr in enumerate(f_xtrs):
         dens = np.fft.ifftn(f_xtr).real
         densities[ii] = dens
+        dens = dens[mask]
         neg_sum[ii] = np.sum(dens[dens < 0])
-        pos_sum[ii] = np.sum(dens[dens > 0])
+        # print(ii, neg_sum[ii])
+    return densities, neg_sum
+
+
+def marius_masked(f_xtrs, mask_pks):
+    arrlen = len(f_xtrs)
+    neg_sum = np.empty((arrlen))
+    densities = np.empty(f_xtrs.shape)
+    for ii, f_xtr in enumerate(f_xtrs):
+        dens = np.fft.ifftn(f_xtr).real
+        densities[ii] = dens
+        dens = dens[mask_pks]
+        neg_sum[ii] = np.sum(dens[dens < 0])
     return densities, neg_sum
 
 
 ############################### Xtrapol8 #######################################
 
-def x8_density_map_f1(f_xtrs, mask_pks, fofo, obj0):
+
+def x8_density_map_f1(f_xtrs, mask_pks, fofo, obj0, posneg=False):
     arrlen = len(f_xtrs)
     peak_sum = np.empty((arrlen))
     real_CC = np.empty((arrlen))
+    peak_pos = np.empty((arrlen))
+    peak_neg = np.empty((arrlen))
     for ii, f_xtr in enumerate(f_xtrs):
         dens = np.fft.ifftn(f_xtr).real
         real_CC[ii] = pearsonr(dens.flatten(), obj0.flatten())[0]
-        peak_sum[ii] = np.abs(dens[mask_pks]).sum() / np.abs(dens).sum()
-        # peak_sum[ii] = np.abs(dens[mask_pks]).sum()/np.abs(fofo[mask_pks]).sum()
+        dens_mask = dens[mask_pks]
+        peak_sum[ii] = np.abs(dens_mask).sum() / np.abs(dens).sum()
+        peak_pos[ii] = ((dens_mask[dens_mask > 0])).sum() / dens[dens > 0].sum()
+        peak_neg[ii] = ((dens_mask[dens_mask < 0])).sum() / dens[dens < 0].sum()
+    if posneg:
+        return peak_sum, real_CC, peak_pos, peak_neg
     return peak_sum, real_CC
 
 
@@ -200,35 +340,171 @@ def x8_density_map_fdiff(f_xtrs, mask_pks, obj0, fofo):
     for ii, f_xtr in enumerate(f_xtrs):
         dens = np.fft.ifftn(f_xtr).real
         real_CC[ii] = pearsonr((dens - obj0).flatten(), fofo.flatten())[0]
-        peak_sum[ii] = np.abs((dens - obj0)[mask_pks]).sum() / np.abs(dens - obj0).sum()
+        diff = dens - obj0
+        peak_sum[ii] = np.abs(diff[mask_pks]).sum() / np.abs(diff).sum()
 
     return peak_sum, real_CC
 
-
-def x8_density_map_fdiff_norm(f_xtrs, mask_pks, obj0, fofo):
+def x8_density_map_fdiff_alpha(f_xtrs, mask_pks, obj0, fofo, alpha_xtrs):
     arrlen = len(f_xtrs)
     peak_sum = np.empty((arrlen))
     real_CC = np.empty((arrlen))
+    for ii, f_xtr in enumerate(f_xtrs):
+        dens = np.fft.ifftn(f_xtr).real
+        dens = dens/alpha_xtrs[ii]/10
+        real_CC[ii] = pearsonr((dens - obj0).flatten(), fofo.flatten())[0]
+        diff = dens - obj0
+        peak_sum[ii] = np.abs(diff[mask_pks]).sum() / np.abs(diff).sum()
+
+    return peak_sum, real_CC
+
+
+def x8_density_map_fdiff_norm(
+    f_xtrs, mask_pks, obj0, fofo, inspect=False, posneg=False
+):
+    arrlen = len(f_xtrs)
+    peak_sum = np.empty((arrlen))
+    real_CC = np.empty((arrlen))
+    peak_pos = np.empty((arrlen))
+    peak_neg = np.empty((arrlen))
+    fract = np.empty((arrlen))
+    obj0max = np.max(obj0)
     obj0 = obj0 / np.max(obj0)
     for ii, f_xtr in enumerate(f_xtrs):
         dens = np.fft.ifftn(f_xtr).real
-        dens = dens / np.max(dens)
+        densmax = np.max(dens)
+        diff = dens / np.max(dens) - obj0
+        diff_mask = diff[mask_pks]
+        fract[ii] = densmax / obj0max
+        real_CC[ii] = pearsonr(diff.flatten(), fofo.flatten())[0]
+        peak_sum[ii] = np.abs(diff_mask).sum() / np.abs(diff).sum()
+        peak_pos[ii] = (
+            np.abs(diff_mask[diff_mask > 0]).sum() / np.abs(diff[diff > 0]).sum()
+        )
+        peak_neg[ii] = (
+            np.abs(diff_mask[diff_mask < 0]).sum() / np.abs(diff[diff < 0]).sum()
+        )
+
+    if posneg:
+        return peak_sum, real_CC, peak_pos, peak_neg
+    if inspect:
+        return peak_sum, real_CC, fract
+    return peak_sum, real_CC
+
+
+def x8_density_map_fdiff_factor(f_xtrs, mask_pks, obj0, fofo, fact=0.99):
+    arrlen = len(f_xtrs)
+    peak_sum = np.empty((arrlen))
+    real_CC = np.empty((arrlen))
+    obj0 = obj0
+    for ii, f_xtr in enumerate(f_xtrs):
+        dens = np.fft.ifftn(f_xtr).real
+        dens = dens * fact
         real_CC[ii] = pearsonr((dens - obj0).flatten(), fofo.flatten())[0]
         peak_sum[ii] = np.abs((dens - obj0)[mask_pks]).sum() / np.abs(dens - obj0).sum()
-
     return peak_sum, real_CC
+
 
 def x8_density_map_fdiff_noisyf0(f_xtrs, mask_pks, obj0, fofo):
     arrlen = len(f_xtrs)
     peak_sum = np.empty((arrlen))
     real_CC = np.empty((arrlen))
-    f0 = np.fft.fftn(obj0) 
-    noise = np.random.normal(size=obj0.shape) * np.mean(np.abs(f0)) 
-    obj_mod = np.fft.ifftn(f0+noise).real
-    
+    f0 = np.fft.fftn(obj0)
+    noise = np.random.normal(size=obj0.shape) * np.mean(np.abs(f0))
+    obj_mod = np.fft.ifftn(f0 + noise).real
+
     for ii, f_xtr in enumerate(f_xtrs):
         dens = np.fft.ifftn(f_xtr).real
         real_CC[ii] = pearsonr((dens - obj_mod).flatten(), fofo.flatten())[0]
-        peak_sum[ii] = np.abs((dens - obj_mod)[mask_pks]).sum() / np.abs(dens - obj0).sum()
+        peak_sum[ii] = (
+            np.abs((dens - obj_mod)[mask_pks]).sum() / np.abs(dens - obj0).sum()
+        )
 
     return peak_sum, real_CC
+
+
+############################### my way #########################################
+def root_finding(f_xtrs, alpha_xtrs):
+    """
+    finds all densities that
+    """
+    dens_xtrs = np.array([np.fft.ifftn(f_xtr).real for f_xtr in f_xtrs])
+    changing_at = np.ones(dens_xtrs.shape[1:]) * -1
+    adiff = np.diff(alpha_xtrs)  # determine whether counting up or down
+    assert (np.sign(adiff) == np.sign(adiff)[0]).all()
+    assert np.sign(adiff)[0] != 0
+    counting_order = slice(None, None, int(np.sign(adiff[0])))
+    all_negs = np.argwhere(dens_xtrs < 0)
+    for all_neg in all_negs[counting_order]:
+        best, index = all_neg[0], all_neg[1:]
+        changing_at[tuple(index)] = alpha_xtrs[best]
+    return changing_at
+
+
+def root_finding2(f_xtrs, alpha_xtrs):
+    """
+    finds all densities that
+    """
+    dens_xtrs = np.array([np.fft.ifftn(f_xtr).real for f_xtr in f_xtrs])
+    changing_at = np.ones(dens_xtrs.shape[1:]) * np.nan
+    adiff = np.diff(alpha_xtrs)  # determine whether counting up or down
+    assert (np.sign(adiff) == np.sign(adiff)[0]).all()
+    assert np.sign(adiff)[0] != 0
+    counting_order = slice(None, None, int(np.sign(adiff[0])))
+    only_with_change = np.sign(dens_xtrs[0]) != np.sign(dens_xtrs[-1])
+    # only_with_change = np.stack([only_with_change for _ in range(len(dens_xtrs))],axis=0)
+    changing_at = np.ones(np.sum(only_with_change)) * np.nan
+    # all_negs = np.argwhere([only_with_change]<0)
+    for ii, dens_xtr in enumerate(dens_xtrs[counting_order]):
+        # best, index = all_neg[0], all_neg[1:]
+        indices = np.argwhere(dens_xtr[only_with_change] < 0)
+        for index in indices:
+            changing_at[tuple(index)] = alpha_xtrs[ii]
+    return changing_at
+
+
+def root_finding_blobs(f_xtrs, alpha_xtrs, mask_pks_neg):
+    dens_xtrs = np.array([np.fft.ifftn(f_xtr).real for f_xtr in f_xtrs])
+    blobs, blob_number = ndimage.label(mask_pks_neg)
+    adiff = np.diff(alpha_xtrs)  # determine whether counting up or down
+    assert (np.sign(adiff) == np.sign(adiff)[0]).all()
+    assert np.sign(adiff)[0] != 0
+    counting_order = slice(None, None, int(np.sign(adiff[0])))
+    integrated_peaks = np.empty((len(dens_xtrs), blob_number))
+    for dens_id, dens_xtr in enumerate(dens_xtrs):
+        for blob_id in range(blob_number):
+            integrated_peaks[dens_id, blob_id] = np.sum(dens_xtr[blobs == blob_id + 1])
+    # print(integrated_peaks)
+    all_negs = np.argwhere(integrated_peaks < 0)
+    changing_at = np.ones(blob_number) * -1
+    for all_neg in all_negs[counting_order]:
+        best, index = all_neg[0], all_neg[1:]
+        changing_at[tuple(index)] = alpha_xtrs[best]
+    return changing_at
+
+
+def root_finding_blobs2(f_xtrs, alpha_xtrs, mask_pks_neg):
+    dens_xtrs = np.array([np.fft.ifftn(f_xtr).real for f_xtr in f_xtrs])
+    blobs, blob_number = ndimage.label(mask_pks_neg)
+    adiff = np.diff(alpha_xtrs)  # determine whether counting up or down
+    assert (np.sign(adiff) == np.sign(adiff)[0]).all()
+    assert np.sign(adiff)[0] != 0
+    counting_order = slice(None, None, int(np.sign(adiff[0])))
+    integrated_peaks = np.empty((len(dens_xtrs), blob_number))
+    for dens_id, dens_xtr in enumerate(dens_xtrs):
+        for blob_id in range(blob_number):
+            integrated_peaks[dens_id, blob_id] = np.sum(dens_xtr[blobs == blob_id + 1])
+    # print(integrated_peaks)
+    # all_negs = np.argwhere(integrated_peaks<0)
+    # changing_at = np.ones(blob_number)*-1
+    # for all_neg in all_negs[counting_order]:
+    #     best, index = all_neg[0], all_neg[1:]
+    #     changing_at[tuple(index)] = alpha_xtrs[best]
+    only_with_change = np.sign(integrated_peaks[0]) != np.sign(integrated_peaks[-1])
+    changing_at = np.ones(np.sum(only_with_change)) * np.nan
+    for ii, int_pks in enumerate(integrated_peaks[counting_order]):
+        indices = np.argwhere(int_pks[only_with_change] < 0)
+        for index in indices:
+            changing_at[tuple(index)] = alpha_xtrs[counting_order][ii]
+    return changing_at
+
