@@ -3,7 +3,7 @@ import matplotlib.pyplot as plt
 from scipy.stats import pearsonr
 from scipy import ndimage
 from scipy import stats
-    
+
 
 from generate_objects import (
     make_objs,
@@ -16,7 +16,6 @@ from generate_objects import (
 ################################################################################
 ######################### Data preparation #####################################
 ################################################################################
-
 
 
 def make_f_xtr(
@@ -76,6 +75,7 @@ def make_f_xtr(
             pass
 
     return f_xtr
+
 
 def make_f_xtr_phased(alphas, f_dark, delta_f, noise_level=0):
     f_dark_abs = np.abs(f_dark)
@@ -137,16 +137,14 @@ def pandda(
 
 ######################## Negative Sum Explosion ################################
 
+
 def get_fits(neg_sum, alpha_invs, n_largest):
-    m_lowest = alpha_invs > alpha_invs[-n_largest]
-    m_biggest = alpha_invs < alpha_invs[n_largest]
+    a_sorted = np.argsort(alpha_invs)
+    m_lowest = a_sorted <= n_largest
+    m_biggest = a_sorted >= len(a_sorted) - n_largest
     res_lowest = stats.linregress(alpha_invs[m_lowest], -neg_sum[m_lowest])
     res_biggest = stats.linregress(alpha_invs[m_biggest], -neg_sum[m_biggest])
-    alpha_line = np.linspace(
-        np.min(alpha_invs),
-        np.max(alpha_invs),
-        5,
-    )
+    alpha_line = np.linspace(np.min(alpha_invs), np.max(alpha_invs), 5)
     fit_lowest = res_lowest.intercept + res_lowest.slope * alpha_line
     fit_biggest = res_biggest.intercept + res_biggest.slope * alpha_line
     return alpha_line, fit_lowest, fit_biggest
@@ -164,6 +162,7 @@ def marius(f_xtrs, mask=None):
         neg_sum[ii] = np.sum(dens[dens < 0])
         # print(ii, neg_sum[ii])
     return densities, neg_sum
+
 
 def marius_masked(f_xtrs, mask_pks):
     arrlen = len(f_xtrs)
@@ -235,13 +234,14 @@ def x8_density_map_fdiff_noisyf0(f_xtrs, mask_pks, obj0, fofo):
 
     return peak_sum, real_CC
 
+
 def x8_density_map_fdiff_alpha(f_xtrs, mask_pks, obj0, fofo, alpha_xtrs):
     arrlen = len(f_xtrs)
     peak_sum = np.empty((arrlen))
     real_CC = np.empty((arrlen))
     for ii, f_xtr in enumerate(f_xtrs):
         dens = np.fft.ifftn(f_xtr).real
-        dens = dens/alpha_xtrs[ii]/10
+        dens = dens / alpha_xtrs[ii] / 10
         real_CC[ii] = pearsonr((dens - obj0).flatten(), fofo.flatten())[0]
         diff = dens - obj0
         peak_sum[ii] = np.abs(diff[mask_pks]).sum() / np.abs(diff).sum()
@@ -333,5 +333,3 @@ def root_finding_blobs2(f_xtrs, alpha_xtrs, mask_pks_neg):
         for index in indices:
             changing_at[tuple(index)] = alpha_xtrs[counting_order][ii]
     return changing_at
-
-
