@@ -156,7 +156,23 @@ def make_working_vars(obj1, obj0, alpha, old_version=False):
 
     return f0, f1a, delta_fa_abs
 
-############################## 2d Objects ######################################    
+############################## Select Items ######################################    
+
+def get_pdb_pairs(choose_experiment:str):
+    pairs = {
+        "real_cistrans": ["8a6g", "8a6r"],
+        "mpro": ["7ar6", "7awr"],
+        "photolyase10": ["8oet", "8oy7"],
+        "photolyase30": ["8oet", "8oy8"],
+        "synthetic_cistrans": ["trans", "100ps"],
+        "doeke": ["5e11", "5e22"],
+    }
+    assert choose_experiment in pairs.keys(), f"choose experiment must be in {pairs.keys()}"
+
+    return pairs[choose_experiment]
+
+
+############################## cistrans ######################################    
 
 def generate_obj_cistrans(imagetype, mean_value_offset=0):
     dataloc = "../synthetic_cistrans/"
