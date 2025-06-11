@@ -245,7 +245,7 @@ def x8_density_map_fdiff_alpha(f_xtrs, mask_pks, obj0, fofo, alpha_xtrs):
         real_CC[ii] = pearsonr((dens - obj0).flatten(), fofo.flatten())[0]
         diff = dens - obj0
         peak_sum[ii] = np.abs(diff[mask_pks]).sum() / np.abs(diff).sum()
-
+    print("fdiff_alpha", alpha_xtrs[np.argmax(peak_sum)])
     return peak_sum, real_CC
 
 

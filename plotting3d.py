@@ -48,11 +48,23 @@ def get_pos_from_pdb(struc: gemmi.Structure, search_occ=None):
 
     frac_list = np.concatenate(frac_add, axis=0)
     frac_list = frac_list % 1
-    if search_occ:
+    if isinstance(search_occ,float):
         occurences = np.array([np.round(x.atom.occ, 2) for x in struc[0].all()])
         occ_mask = 1 * (occurences == search_occ) + 2 * (occurences == 1 - search_occ)
         occ_mask = np.tile(occ_mask, (4))
         return frac_list, occ_mask
+    if isinstance(search_occ,list):
+        occurences = np.array([np.round(x.atom.occ, 2) for x in struc[0].all()])
+        occ_mask = np.zeros_like(occurences)
+        for ii, search in enumerate(search_occ):
+            for ss in search:
+                total = np.sum(occurences+0.005 == ss)
+                print("Occurences", ss, total)
+                occ_mask += (ii+1) * (occurences+0.005 == ss)
+        occ_mask = np.tile(occ_mask, (4))
+        return frac_list, occ_mask
+    else:
+        print(type(search_occ))
     return frac_list
 
 
@@ -465,7 +477,7 @@ def difference_map_plot(
         ax.axvline(config.alpha, c="k", linestyle="-.", label="alpha_true")
 
     for ax in axs[1]:
-        ax.axhline( 0, c="k", linewidth=0.5)
+        ax.axhline(0, c="k", linewidth=0.5)
         ax.set_ylabel("Cross Correlation")
         ax.set_xlabel("Alphas")
         ax.set_title("Difference Map (CC) Method")
@@ -509,6 +521,32 @@ def pandda_bin_comp(delta_obj, strict, lax, config):
     plt.ylabel("Frequency")
     fname = "pandda_bins"
     savefig(fig, config, fname)
+
+
+def pandda_actual_plot(alpha_xtrs, mean_global, mean_local, axs, title, config):
+        ax = axs[0]
+        ax.set_title(title)
+        ax.axvline(
+            config.alpha,
+            c="k",
+            linestyle="-.",
+        )
+        ax.plot(alpha_xtrs, +mean_global - mean_local, label="global-local")
+        ax.set_ylabel("$\\Delta$ Cross correlation")
+        ax.legend()
+        ax = axs[1]
+        ax.axvline(
+            config.alpha,
+            c="k",
+            linestyle="-.",
+        )
+        ax.axhline(0, c="k", linestyle="--")
+        ax.plot(alpha_xtrs, mean_local, label="local")
+        ax.plot(alpha_xtrs, mean_global, label="global")
+        ax.set_xlabel("Occupancy")
+        ax.set_ylabel("Cross correlation with $F_0$")
+        ax.legend()
+        return
 
 
 def pandda_plot(alpha_xtrs, f_xtrs, f_dark, mask_pks_lax, mask_pks_strict, config):
@@ -569,10 +607,13 @@ def plot_density_match(ou1, config, title, fname):
 
 
 def savefig(fig, config, fname):
+    filespec =  fname_variant(config.imagetype) + "_" + fname
+    save_fig(fig, filespec)
+
+def save_fig(fig, fname):
     for ending, folder in zip([".png", ".pdf"], get_fig_folders()):
-        loc = folder + fname_variant(config.imagetype)
-        final_file_name = loc + "_" + fname + ending
-        print(final_file_name)
+        final_file_name = folder + fname + ending
+        print("saving in", final_file_name)
         fig.savefig(final_file_name, bbox_inches="tight")
 
 
