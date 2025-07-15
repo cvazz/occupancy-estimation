@@ -1,6 +1,7 @@
 import numpy as np
 import matplotlib.pyplot as plt
 from occupancy import *
+from scipy.stats import wasserstein_distance
 
 try:
     import ipywidgets as widgets
@@ -48,19 +49,19 @@ def get_pos_from_pdb(struc: gemmi.Structure, search_occ=None):
 
     frac_list = np.concatenate(frac_add, axis=0)
     frac_list = frac_list % 1
-    if isinstance(search_occ,float):
+    if isinstance(search_occ, float):
         occurences = np.array([np.round(x.atom.occ, 2) for x in struc[0].all()])
         occ_mask = 1 * (occurences == search_occ) + 2 * (occurences == 1 - search_occ)
         occ_mask = np.tile(occ_mask, (4))
         return frac_list, occ_mask
-    if isinstance(search_occ,list):
+    if isinstance(search_occ, list):
         occurences = np.array([np.round(x.atom.occ, 2) for x in struc[0].all()])
         occ_mask = np.zeros_like(occurences)
         for ii, search in enumerate(search_occ):
             for ss in search:
-                total = np.sum(occurences+0.005 == ss)
+                total = np.sum(occurences + 0.005 == ss)
                 print("Occurences", ss, total)
-                occ_mask += (ii+1) * (occurences+0.005 == ss)
+                occ_mask += (ii + 1) * (occurences + 0.005 == ss)
         occ_mask = np.tile(occ_mask, (4))
         return frac_list, occ_mask
     else:
@@ -383,13 +384,13 @@ def direct_comp(
 ########################### Master Section #####################################
 
 
-def add_fit(neg_sum, alpha_invs, n_largest, kwargs={}):
+def add_fit(neg_sum, alpha_invs, n_largest, ax=None,kwargs={}):
     kwargs = {"linestyle": "--", "alpha": 0.5} | {}
     alpha_line, fit_biggest1, fit_lowest1 = get_fits(neg_sum, alpha_invs, n_largest)
-    plt.plot(
+    ax.plot(
         alpha_line, fit_lowest1, **kwargs, c="red", label=f"Fit (largest {n_largest})"
     )
-    plt.plot(
+    ax.plot(
         alpha_line, fit_biggest1, **kwargs, c="g", label=f"Fit (smallest {n_largest})"
     )
 
@@ -524,29 +525,29 @@ def pandda_bin_comp(delta_obj, strict, lax, config):
 
 
 def pandda_actual_plot(alpha_xtrs, mean_global, mean_local, axs, title, config):
-        ax = axs[0]
-        ax.set_title(title)
-        ax.axvline(
-            config.alpha,
-            c="k",
-            linestyle="-.",
-        )
-        ax.plot(alpha_xtrs, +mean_global - mean_local, label="global-local")
-        ax.set_ylabel("$\\Delta$ Cross correlation")
-        ax.legend()
-        ax = axs[1]
-        ax.axvline(
-            config.alpha,
-            c="k",
-            linestyle="-.",
-        )
-        ax.axhline(0, c="k", linestyle="--")
-        ax.plot(alpha_xtrs, mean_local, label="local")
-        ax.plot(alpha_xtrs, mean_global, label="global")
-        ax.set_xlabel("Occupancy")
-        ax.set_ylabel("Cross correlation with $F_0$")
-        ax.legend()
-        return
+    ax = axs[0]
+    ax.set_title(title)
+    ax.axvline(
+        config.alpha,
+        c="k",
+        linestyle="-.",
+    )
+    ax.plot(alpha_xtrs, +mean_global - mean_local, label="global-local")
+    ax.set_ylabel("$\\Delta$ Cross correlation")
+    ax.legend()
+    ax = axs[1]
+    ax.axvline(
+        config.alpha,
+        c="k",
+        linestyle="-.",
+    )
+    ax.axhline(0, c="k", linestyle="--")
+    ax.plot(alpha_xtrs, mean_local, label="local")
+    ax.plot(alpha_xtrs, mean_global, label="global")
+    ax.set_xlabel("Occupancy")
+    ax.set_ylabel("Cross correlation with $F_0$")
+    ax.legend()
+    return
 
 
 def pandda_plot(alpha_xtrs, f_xtrs, f_dark, mask_pks_lax, mask_pks_strict, config):
@@ -607,8 +608,9 @@ def plot_density_match(ou1, config, title, fname):
 
 
 def savefig(fig, config, fname):
-    filespec =  fname_variant(config.imagetype) + "_" + fname
+    filespec = fname_variant(config.imagetype) + "_" + fname
     save_fig(fig, filespec)
+
 
 def save_fig(fig, fname):
     for ending, folder in zip([".png", ".pdf"], get_fig_folders()):
@@ -630,6 +632,125 @@ def density_matching(f_xtrs, alpha_xtrs, mask_pks_neg, config):
     plot_density_match(
         root_voxel, config, "Density Matching (Voxel)", "density_matching_voxel"
     )
+
+def val_distributions3(density_dark, density_light, mask, bins=None, details=True):
+    bins = bins if bins is not None else np.arange(-1, 1.4, 0.005)
+
+    bin_centers = bins[:-1] + np.diff(bins)
+    hist_dark, _ = np.histogram(
+        density_dark[mask].ravel(), bins=bins,
+    )
+    hist_light, _ = np.histogram(
+        density_light[mask].ravel(), bins=bins, 
+    )
+    if (hist_light == 0).all():
+        hist_light[0] = 1
+    # ax.set_xscale('symlog',linthresh=1e-3)
+    wasser_dist = wasserstein_distance(bins[:-1], bins[:-1], hist_dark, hist_light)
+    if details:
+        return wasser_dist, bin_centers, hist_dark, hist_light
+    return wasser_dist
+
+def val_distributions2(density_dark, density_light, mask, bins, config, ax=None):
+    bins = bins if bins is not None else np.arange(-1, 1.4, 0.005)
+
+    # Plot histograms on first subplot
+    occu_txt = f"Occupancy Estimate (True):\n {config['alpha_xtr']}({config['alpha']})"
+    occu_txt2 = f"Occupancy:\n {config['alpha_xtr']}({config['alpha']})"
+    if ax is None:
+        fig, ax = plt.subplots(1, 1, tight_layout=True)
+        fig.suptitle(occu_txt)
+    else:
+        print(ax)
+        ax.set_ylabel(occu_txt2)
+    hist_dark, _, _ = ax.hist(
+        density_dark[mask].ravel(), bins=bins, alpha=0.5, label="Dark"
+    )
+    hist_light, _, _ = ax.hist(
+        density_light[mask].ravel(), bins=bins, alpha=0.5, label="Extrapol."
+    )
+    if (hist_light == 0).all():
+        hist_light[0] = 1
+    # ax.set_xscale('symlog',linthresh=1e-3)
+    wasser_dist = wasserstein_distance(bins[:-1], bins[:-1], hist_dark, hist_light)
+    # cc_ROC = correl(density_light[mask], true_xtr[mask])
+    # cc_glob = correl(density_light, true_xtr)
+    title = f"Wasserstein Distance: {wasser_dist:.4f}"  # , W-mult: {wd*len(bins)"
+    # title += f"\nCC: {cc_glob:.4f}"
+    # title += f"\tCC (RoC): {cc_ROC:.4f}"
+    ax.set_title(title)
+    ax.set_xlabel("Density")
+    ax.legend()
+    if config["zoom_in"]:
+        ax.set_ylim(0, np.max(hist_dark))
+        # ax.set_ylim(0,50_000)
+    # ax.set_xlim(0,50_000)
+    print("hist_dark max", np.max(hist_dark))
+    return wasser_dist
+
+def val_distributions(density_dark, density_light, mask, bins, config, axs=None):
+    bins = bins if bins is not None else np.arange(-1, 1.4, 0.005)
+
+    # Plot histograms on first subplot
+    occu_txt = f"Occupancy Estimate (True):\n {config['alpha_xtr']}({config['alpha']})"
+    occu_txt2 = f"Occupancy:\n {config['alpha_xtr']}({config['alpha']})"
+    if axs is None:
+        fig, axs = plt.subplots(1, 2, tight_layout=True)
+        fig.suptitle(occu_txt)
+    else:
+        print(axs)
+        axs[0].set_ylabel(occu_txt2)
+    ax = axs[0]
+    hist_dark, _, _ = ax.hist(
+        density_dark[mask].ravel(), bins=bins, alpha=0.5, label="Dark"
+    )
+    hist_light, _, _ = ax.hist(
+        density_light[mask].ravel(), bins=bins, alpha=0.5, label="Extrapol."
+    )
+    if (hist_light == 0).all():
+        hist_light[0] = 1
+    # ax.set_xscale('symlog',linthresh=1e-3)
+    wasser_dist = wasserstein_distance(bins[:-1], bins[:-1], hist_dark, hist_light)
+    # cc_ROC = correl(density_light[mask], true_xtr[mask])
+    # cc_glob = correl(density_light, true_xtr)
+    title = f"Wasserstein Distance: {wasser_dist:.4f}"  # , W-mult: {wd*len(bins)"
+    # title += f"\nCC: {cc_glob:.4f}"
+    # title += f"\tCC (RoC): {cc_ROC:.4f}"
+    ax.set_title(title)
+    ax.set_xlabel("Density")
+    ax.legend()
+    if config["zoom_in"]:
+        ax.set_ylim(0, np.max(hist_dark))
+        # ax.set_ylim(0,50_000)
+    # ax.set_xlim(0,50_000)
+    print("hist_dark max", np.max(hist_dark))
+
+    # Plot difference on second subplot
+    ax = axs[1]
+    bin_centers = bins[:-1] + np.diff(bins)
+    diff = hist_light - hist_dark
+    bin_widths = bins[1:] - bins[:-1]
+    diff = hist_light - hist_dark
+
+    ax.bar(
+        bin_centers, diff, width=bin_widths, align="center", label="Extrapol. - Dark)"
+    )
+    # ax.set_xscale('log')
+
+    # ax.plot(bin_centers, diff, drawstyle='steps-mid')
+    # ax.set_title()
+    ax.axhline(0, color="gray", linestyle="--")
+    ax.legend()
+    ax.set_xlabel("Density")
+    ax.set_ylabel("Count Difference")
+    # ax.set_xscale('symlog',linthresh=1e-3)
+    if config["zoom_in"]:
+        ax.set_ylim(-500, 500)
+        ax.set_ylim(-50, 50)
+    return wasser_dist
+
+
+# val_distributions(density_dark, density_light)
 
 
 from dataclasses import dataclass
