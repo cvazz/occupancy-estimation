@@ -398,8 +398,10 @@ def generate_obj_cistrans_v2(occupancy, noise_level, no_negs=False, scaleit=True
 
 ################# scaleit###############
 def write_scaleit_input(mtz_in, b_scaling, low_res, high_res, columns):
-    mtz_out = "from_scaleit.mtz"
-    script_out = "launch_scaleit.sh"
+    temp_folder = "tmp/"
+    os.makedirs(temp_folder, mode=0o777, exist_ok=True)
+    mtz_out = temp_folder + "from_scaleit.mtz"
+    script_out = temp_folder + "launch_scaleit.sh"
     i = open(script_out, "w")
     columns = (
         columns
@@ -418,12 +420,12 @@ def write_scaleit_input(mtz_in, b_scaling, low_res, high_res, columns):
 
     i.write(
         "#!/bin/bash\n\
-scaleit HKLIN %s HKLOUT %s <<eof > scaleit.log\n\
+scaleit HKLIN %s HKLOUT %s <<eof > %sscaleit.log\n\
 REFINE %s \n\
 RESOLUTION %.2f %.2f \n\
 %s \n\
 eof"
-        % (mtz_in, mtz_out, b_scaling, low_res, high_res, column_str)
+        % (mtz_in, mtz_out, temp_folder, b_scaling, low_res, high_res, column_str)
     )
 
     i.close()
@@ -431,12 +433,14 @@ eof"
 
 
 def comb_strucs(struc_vals, struc_vals2=None):
+    temp_folder = "tmp/"
+    os.makedirs(temp_folder, mode=0o777, exist_ok=True)
     if struc_vals2 is not None:
         struc_vals["F2"] = struc_vals2["F"]
         struc_vals["PHI2"] = struc_vals2["PHI"]
         struc_vals["SIGF2"] = struc_vals2["SIGF"]
 
-    mtz_to_scaleit = "to_scaleit.mtz"
+    mtz_to_scaleit = temp_folder +"to_scaleit.mtz"
     struc_vals.write_mtz(mtz_to_scaleit)
     return mtz_to_scaleit, struc_vals
 
