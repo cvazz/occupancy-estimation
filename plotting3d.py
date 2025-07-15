@@ -1,4 +1,5 @@
 import numpy as np
+import os
 import matplotlib.pyplot as plt
 from occupancy import *
 from scipy.stats import wasserstein_distance
@@ -611,11 +612,32 @@ def savefig(fig, config, fname):
     filespec = fname_variant(config.imagetype) + "_" + fname
     save_fig(fig, filespec)
 
+def split_first_n_directories(path: str, n: int) -> str:
+    """
+    Splits and returns the first n directories from a given path.
+
+    Args:
+        path (str): The full path to split.
+        n (int): Number of directories to keep from the start.
+
+    Returns:
+        str: A path made up of the first n directories.
+    """
+    # Normalize and split the path
+    path_parts = os.path.normpath(path).split(os.sep)
+    
+    # Handle edge cases
+    if n <= 0:
+        return ''
+    if n > len(path_parts):
+        return os.path.join(*path_parts)
+    
+    return os.path.join(*path_parts[:n])
 
 def save_fig(fig, fname):
     for ending, folder in zip([".png", ".pdf"], get_fig_folders()):
         final_file_name = folder + fname + ending
-        print("saving in", final_file_name)
+        print("saving in", split_first_n_directories(final_file_name,3))
         fig.savefig(final_file_name, bbox_inches="tight")
 
 
