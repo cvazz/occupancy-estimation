@@ -632,12 +632,12 @@ def split_first_n_directories(path: str, n: int) -> str:
     if n > len(path_parts):
         return os.path.join(*path_parts)
     
-    return os.path.join(*path_parts[:n])
+    return os.path.join(*path_parts[n:])
 
 def save_fig(fig, fname):
     for ending, folder in zip([".png", ".pdf"], get_fig_folders()):
         final_file_name = folder + fname + ending
-        print("saving in", split_first_n_directories(final_file_name,3))
+        print(f"saving in .../{split_first_n_directories(final_file_name,4)}")
         fig.savefig(final_file_name, bbox_inches="tight")
 
 
