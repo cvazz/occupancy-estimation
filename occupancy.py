@@ -163,6 +163,14 @@ def marius(f_xtrs, mask=None):
         # print(ii, neg_sum[ii])
     return densities, neg_sum
 
+def negsum_explode(dens_xtrs, mask=None):
+    mask = np.ones(dens_xtrs.shape[1:], bool) if mask is None else mask
+    arrlen = len(dens_xtrs)
+    neg_sum = np.empty((arrlen))
+    for ii, dens in enumerate(dens_xtrs):
+        dens = dens[mask]
+        neg_sum[ii] = np.sum(dens[dens < 0])
+    return  neg_sum
 
 def marius_masked(f_xtrs, mask_pks):
     arrlen = len(f_xtrs)
