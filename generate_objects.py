@@ -10,7 +10,7 @@ from inspect import getsourcefile
 from os.path import abspath, dirname
 
 try:
-    import gemmi 
+    import gemmi
 except ImportError:
     print("gemmi not available")
 
@@ -20,12 +20,13 @@ except ImportError:
     print("reciprocalspaceship not available")
 
 try:
-    import meteor 
-    from meteor import sfcalc  
+    import meteor
+    from meteor import sfcalc
 except ImportError:
     print("meteor not available")
-    
-############################## Folder Magic ######################################    
+
+############################## Folder Magic ######################################
+
 
 def get_base_folder():
     """returns current folder location (of this file)
@@ -33,7 +34,8 @@ def get_base_folder():
     Returns:
         str: location of folder
     """
-    return dirname(abspath(getsourcefile(lambda:0)))
+    return dirname(abspath(getsourcefile(lambda: 0)))
+
 
 def get_fig_folders():
     """retuns folders for figures
@@ -48,9 +50,9 @@ def get_fig_folders():
         base_folder + "/../tex/figs/",
     ]
 
-############################## 2d Objects ######################################    
-def make_objs(
 
+############################## 2d Objects ######################################
+def make_objs(
     nx=256,
     ny=256,
     n_pos=600,
@@ -156,9 +158,11 @@ def make_working_vars(obj1, obj0, alpha, old_version=False):
 
     return f0, f1a, delta_fa_abs
 
-############################## Select Items ######################################    
 
-def get_pdb_pairs(choose_experiment:str):
+############################## Select Items ######################################
+
+
+def get_pdb_pairs(choose_experiment: str):
     pairs = {
         "real_cistrans": ["8a6g", "8a6r"],
         "mpro": ["7ar6", "7awr"],
@@ -167,12 +171,15 @@ def get_pdb_pairs(choose_experiment:str):
         "synthetic_cistrans": ["trans", "100ps"],
         "doeke": ["5e11", "5e22"],
     }
-    assert choose_experiment in pairs.keys(), f"choose experiment must be in {pairs.keys()}"
+    assert (
+        choose_experiment in pairs.keys()
+    ), f"choose experiment must be in {pairs.keys()}"
 
     return pairs[choose_experiment]
 
 
-############################## cistrans ######################################    
+############################## cistrans ######################################
+
 
 def generate_obj_cistrans(imagetype, mean_value_offset=0):
     dataloc = "../synthetic_cistrans/"
@@ -207,9 +214,9 @@ def generate_obj_cistrans(imagetype, mean_value_offset=0):
         obj1 = np.real(np.fft.ifftn(f_light))
         obj0 = np.real(np.fft.ifftn(f_dark))
         minobj1 = np.min(obj1)
-        if minobj1<0:
-            obj0-=minobj1
-            obj1-=minobj1
+        if minobj1 < 0:
+            obj0 -= minobj1
+            obj1 -= minobj1
         f_dark = np.fft.fftn(obj0)
         f_light = np.fft.fftn(obj1)
 
@@ -226,15 +233,15 @@ def generate_obj_cistrans(imagetype, mean_value_offset=0):
 def generate_obj(imagetype, kwargs={}):
     """
     selector between different generator functions
-    
+
     Parameters
     ----------
     imagetype : str
         defines type of generated object
 
-    Returns 
+    Returns
     ----------
-    values    
+    values
     """
     if imagetype == "2d":
         alpha = 0.3 if not "alpha" in kwargs.keys() else kwargs["alpha"]
@@ -252,13 +259,13 @@ def generate_obj(imagetype, kwargs={}):
             else kwargs["mean_value_offset"]
         )
         if "offset" in imagetype:
-            mean_value_offset= 90_000 
+            mean_value_offset = 90_000
             imagevariant = imagetype[:-7]
         else:
             mean_value_offset = 0
             imagevariant = imagetype
         return generate_obj_cistrans(imagevariant, mean_value_offset)
-    
+
 
 def generate_obj_v2(imagetype, kwargs={}):
     """generate objects
@@ -272,17 +279,35 @@ def generate_obj_v2(imagetype, kwargs={}):
     """
 
     mean_value_offset = (
-        0.3
-        if not "mean_value_offset" in kwargs.keys()
-        else kwargs["mean_value_offset"]
+        0.3 if not "mean_value_offset" in kwargs.keys() else kwargs["mean_value_offset"]
     )
     if "offset" in imagetype:
-        mean_value_offset= 90_000 
+        mean_value_offset = 90_000
         imagevariant = imagetype[:-7]
     else:
         mean_value_offset = 0
         imagevariant = imagetype
     return generate_obj_cistrans(imagevariant, mean_value_offset)
+
+
+def struc2kspace(struc, hs_limit, noise_level):
+    map_vals = meteor.sfcalc.gemmi_structure_to_calculated_map(
+        struc, high_resolution_limit=hs_limit
+    )
+    struc_vals = rs.DataSet(map_vals)
+    noise = np.random.normal(loc=0.0, scale=noise_level * np.abs(struc_vals["F"]))
+    struc_vals["F"] = struc_vals["F"] + noise
+    struc_vals["SIGF"] = noise_level + 0.01
+    struc_vals["SIGF"] = struc_vals["SIGF"].astype("Q")
+    return struc_vals
+
+
+def get_k2real(struc_vals, addon=""):
+    struc_vals["sf"] = struc_vals.to_structurefactor("F" + addon, "PHI" + addon)
+    struc_vals_grid = struc_vals.to_reciprocal_grid("sf")
+    struc_vals_real = np.fft.ifftn(struc_vals_grid).real
+    return struc_vals_real
+
 
 def struc2realspace(struc, hs_limit, noise_level):
     """
@@ -296,10 +321,10 @@ def struc2realspace(struc, hs_limit, noise_level):
     ----------
     struc : gemmi.Structure or similar
         The molecular structure to convert to real space.
-        
+
     hs_limit : float
         High resolution limit (in Angstroms) for the structure factor calculation.
-        
+
     noise_level : float
         Scale factor for the noise to be added to the structure factor amplitudes.
         The noise is drawn from a normal distribution with mean 0 and
@@ -310,11 +335,13 @@ def struc2realspace(struc, hs_limit, noise_level):
     numpy.ndarray
         Real space electron density map as a 3D numpy array.
     """
-    map_vals = meteor.sfcalc.gemmi_structure_to_calculated_map(struc, high_resolution_limit=hs_limit)
-    struc_vals=rs.DataSet(map_vals)
+    map_vals = meteor.sfcalc.gemmi_structure_to_calculated_map(
+        struc, high_resolution_limit=hs_limit
+    )
+    struc_vals = rs.DataSet(map_vals)
     noise = np.random.normal(loc=0.0, scale=noise_level * np.abs(struc_vals["F"]))
     struc_vals["F"] = struc_vals["F"] + noise
-    struc_vals["sf"] = struc_vals.to_structurefactor("F","PHI")
+    struc_vals["sf"] = struc_vals.to_structurefactor("F", "PHI")
     struc_vals_grid = struc_vals.to_reciprocal_grid("sf")
     struc_vals_real = np.fft.ifftn(struc_vals_grid).real
     return struc_vals_real
@@ -323,15 +350,16 @@ def struc2realspace(struc, hs_limit, noise_level):
 def overwrite_occupancy(struc, new_occ):
     target_occ = 0.27
     for x in struc[0].all():
-        if np.round(x.atom.occ,2)==  target_occ:
-            x.atom.occ=new_occ
-        elif np.round(x.atom.occ,2) == 1-target_occ:
-            x.atom.occ=1-new_occ
+        if np.round(x.atom.occ, 2) == target_occ:
+            x.atom.occ = new_occ
+        elif np.round(x.atom.occ, 2) == 1 - target_occ:
+            x.atom.occ = 1 - new_occ
         else:
             pass
     return struc
-    
-def generate_obj_cistrans_v2(occupancy, noise_level, no_negs = False):
+
+
+def generate_obj_cistrans_v2(occupancy, noise_level, no_negs=False, scaleit=True):
     hs_limit = 1.6
     identifier = f"ct_occ_{occupancy*100:.0f}_noise_{noise_level*100:.0f}"
     dataloc = "../synthetic_cistrans/"
@@ -342,15 +370,23 @@ def generate_obj_cistrans_v2(occupancy, noise_level, no_negs = False):
     struc_light = gemmi.read_structure(dataloc + pdbname_light)
 
     struc_light = overwrite_occupancy(struc_light, occupancy)
-
-    obj0 = struc2realspace(struc_dark, hs_limit, noise_level)
-    obj1 = struc2realspace(struc_light, hs_limit, noise_level)
+    if scaleit:
+        mtz_dark = struc2kspace(struc_dark, hs_limit, noise_level)
+        mtz_light = struc2kspace(struc_light, hs_limit, noise_level)
+        mtz_combined = run_scaleit(mtz_dark, mtz_light, False)
+        obj0 = get_k2real(
+            mtz_combined,
+        )
+        obj1 = get_k2real(mtz_combined, "2")
+    else:
+        obj0 = struc2realspace(struc_dark, hs_limit, noise_level)
+        obj1 = struc2realspace(struc_light, hs_limit, noise_level)
 
     if no_negs:
         minobj1 = np.min(obj1)
-        if minobj1<0:
-            obj0-=minobj1
-            obj1-=minobj1
+        if minobj1 < 0:
+            obj0 -= np.min(obj1)
+            obj1 -= minobj1
 
     f_dark = np.fft.fftn(obj0)
     f_light = np.fft.fftn(obj1)
@@ -358,4 +394,84 @@ def generate_obj_cistrans_v2(occupancy, noise_level, no_negs = False):
     delta_fa_abs = np.abs(f_light) - np.abs(f_dark)
 
     return obj0, obj1, f_dark, f_light, delta_fa_abs, identifier
-    
+
+
+################# scaleit###############
+def write_scaleit_input(mtz_in, b_scaling, low_res, high_res, columns):
+    mtz_out = "from_scaleit.mtz"
+    script_out = "launch_scaleit.sh"
+    i = open(script_out, "w")
+    columns = (
+        columns
+        if columns != {}
+        else {
+            "light_f": "F2",
+            "dark_f": "F",
+            "light_sig": "SIGF2",
+            "dark_sig": "SIGF",
+        }
+    )
+    column_str = (
+        f"LABIN FP = {columns['dark_f']} SIGFP = {columns['dark_sig']}"
+        + f" FPH1 = {columns['light_f']} SIGFPH1 = {columns['light_sig']}"
+    )
+
+    i.write(
+        "#!/bin/bash\n\
+scaleit HKLIN %s HKLOUT %s <<eof > scaleit.log\n\
+REFINE %s \n\
+RESOLUTION %.2f %.2f \n\
+%s \n\
+eof"
+        % (mtz_in, mtz_out, b_scaling, low_res, high_res, column_str)
+    )
+
+    i.close()
+    return mtz_out, script_out
+
+
+def comb_strucs(struc_vals, struc_vals2=None):
+    if struc_vals2 is not None:
+        struc_vals["F2"] = struc_vals2["F"]
+        struc_vals["PHI2"] = struc_vals2["PHI"]
+        struc_vals["SIGF2"] = struc_vals2["SIGF"]
+
+    mtz_to_scaleit = "to_scaleit.mtz"
+    struc_vals.write_mtz(mtz_to_scaleit)
+    return mtz_to_scaleit, struc_vals
+
+
+def run_scaleit(
+    mtz_dark,
+    mtz_light,
+    b_scaling: str,
+    low_res=None,
+    high_res=None,
+    log=sys.stdout,
+    columns={},
+):
+    if b_scaling == "isotropic":
+        b_scaling = "ISOTROPIC"
+    elif b_scaling == "anisotropic":
+        b_scaling = "ANISOTROPIC"
+    else:
+        b_scaling = "SCALE"
+
+    mtz_to_scaleit, struc_vals = comb_strucs(mtz_dark, mtz_light)
+    dmax, dmin = 50, 1
+    if low_res == None:
+        low_res = dmax
+    if high_res == None:
+        high_res = dmin
+
+    mtz_fromscaleit, script_scaleit = write_scaleit_input(
+        mtz_to_scaleit, b_scaling, low_res, high_res, columns
+    )
+
+    os.system("chmod +x %s" % (script_scaleit))
+    print("Running scaleit, see %s" % (script_scaleit), file=log)
+    os.system("./%s" % (script_scaleit))
+
+    df = rs.read_mtz(mtz_fromscaleit)
+
+    return df
