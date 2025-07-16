@@ -385,7 +385,7 @@ def direct_comp(
 ########################### Master Section #####################################
 
 
-def add_fit(neg_sum, alpha_invs, n_largest, ax=None,kwargs={}):
+def add_fit(neg_sum, alpha_invs, n_largest, ax=None, kwargs={}):
     kwargs = {"linestyle": "--", "alpha": 0.5} | {}
     alpha_line, fit_biggest1, fit_lowest1 = get_fits(neg_sum, alpha_invs, n_largest)
     ax.plot(
@@ -612,6 +612,7 @@ def savefig(fig, config, fname):
     filespec = fname_variant(config.imagetype) + "_" + fname
     save_fig(fig, filespec)
 
+
 def split_first_n_directories(path: str, n: int) -> str:
     """
     Splits and returns the first n directories from a given path.
@@ -625,14 +626,15 @@ def split_first_n_directories(path: str, n: int) -> str:
     """
     # Normalize and split the path
     path_parts = os.path.normpath(path).split(os.sep)
-    
+
     # Handle edge cases
     if n <= 0:
-        return ''
+        return ""
     if n > len(path_parts):
         return os.path.join(*path_parts)
-    
+
     return os.path.join(*path_parts[n:])
+
 
 def save_fig(fig, fname):
     for ending, folder in zip([".png", ".pdf"], get_fig_folders()):
@@ -655,15 +657,17 @@ def density_matching(f_xtrs, alpha_xtrs, mask_pks_neg, config):
         root_voxel, config, "Density Matching (Voxel)", "density_matching_voxel"
     )
 
+
 def val_distributions3(density_dark, density_light, mask, bins=None, details=True):
     bins = bins if bins is not None else np.arange(-1, 1.4, 0.005)
-
     bin_centers = bins[:-1] + np.diff(bins)
     hist_dark, _ = np.histogram(
-        density_dark[mask].ravel(), bins=bins,
+        density_dark[mask].ravel(),
+        bins=bins,
     )
     hist_light, _ = np.histogram(
-        density_light[mask].ravel(), bins=bins, 
+        density_light[mask].ravel(),
+        bins=bins,
     )
     if (hist_light == 0).all():
         hist_light[0] = 1
@@ -672,6 +676,7 @@ def val_distributions3(density_dark, density_light, mask, bins=None, details=Tru
     if details:
         return wasser_dist, bin_centers, hist_dark, hist_light
     return wasser_dist
+
 
 def val_distributions2(density_dark, density_light, mask, bins, config, ax=None):
     bins = bins if bins is not None else np.arange(-1, 1.4, 0.005)
@@ -709,6 +714,7 @@ def val_distributions2(density_dark, density_light, mask, bins, config, ax=None)
     # ax.set_xlim(0,50_000)
     print("hist_dark max", np.max(hist_dark))
     return wasser_dist
+
 
 def val_distributions(density_dark, density_light, mask, bins, config, axs=None):
     bins = bins if bins is not None else np.arange(-1, 1.4, 0.005)
