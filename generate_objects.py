@@ -182,7 +182,7 @@ def get_pdb_pairs(choose_experiment: str):
 
 
 def generate_obj_cistrans(imagetype, mean_value_offset=0):
-    dataloc = "../synthetic_cistrans/"
+    dataloc = get_base_folder()+"/../synthetic_cistrans/"
     match imagetype:
         case "cistrans_nonoise":
             name_dark = "trans_sf.mtz"
@@ -362,7 +362,7 @@ def overwrite_occupancy(struc, new_occ):
 def generate_obj_cistrans_v2(occupancy, noise_level, no_negs=False, scaleit=True):
     hs_limit = 1.6
     identifier = f"ct_occ_{occupancy*100:.0f}_noise_{noise_level*100:.0f}"
-    dataloc = "../synthetic_cistrans/"
+    dataloc = get_base_folder()+"/../synthetic_cistrans/"
     pdbname_dark = "trans.pdb"
     pdbname_light = "100ps.pdb"
 

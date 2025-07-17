@@ -386,6 +386,7 @@ def direct_comp(
 
 
 def add_fit(neg_sum, alpha_invs, n_largest, ax=None, kwargs={}):
+    ax = ax if ax is not None else plt
     kwargs = {"linestyle": "--", "alpha": 0.5} | {}
     alpha_line, fit_biggest1, fit_lowest1 = get_fits(neg_sum, alpha_invs, n_largest)
     ax.plot(
