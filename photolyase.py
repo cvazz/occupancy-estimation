@@ -15,7 +15,7 @@ def k2real(f):
     return np.real(np.fft.fftn(f_prime))
 
 
-def get_exp_structure_factors(ds_dark, ds_light):
+def get_exp_structure_factors(ds_dark, ds_light, return_ds=False):
 
     dark_f = "F-obs-filtered"
     dark_phi = "PHIF-model"
@@ -45,6 +45,8 @@ def get_exp_structure_factors(ds_dark, ds_light):
 
     for column in columns.values():
         ds_comb[column] = ds_scaleit[column]
+    if return_ds:
+        return ds_comb
 
     ds_comb[phi_corr] = (ds_light[light_f] < 0) * np.pi
 
@@ -216,6 +218,36 @@ def ccp4_to_mask(mask_loc, target_shape):
 
 
 from plotting3d import val_distributions3
+
+def find_wasserstein_dip(xvalues,yvalues):
+    yvalues = np.asarray(yvalues)
+    xvalues = np.asarray(xvalues)
+
+    if yvalues.shape != xvalues.shape:
+        raise ValueError("yvalues and xvalues must have the same shape.")
+
+    # Step 1: Find the global minimum
+    min_idx = np.argmin(yvalues)
+    if min_idx != 0:
+        return xvalues[min_idx]
+
+    # Step 2: Compute gradient
+    grad = np.gradient(yvalues)
+
+    # Step 3: Find where gradient first turns negative
+    neg_grad_indices = np.where(grad < 0)[0]
+    if neg_grad_indices.size == 0:
+        return None
+
+    start_idx = neg_grad_indices[0]
+
+    # Step 4: Find minimum from that point forward
+    y_sub = yvalues[start_idx:]
+    rel_min_idx = np.argmin(y_sub)
+    true_min_idx = start_idx + rel_min_idx
+
+    return xvalues[true_min_idx]
+
 
 
 def get_hists(dens_xtrs, rho_dark, mask, bins):
