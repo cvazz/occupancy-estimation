@@ -193,6 +193,70 @@ def slice_3d(
         return anim
     return fig
 
+def panels_3d(
+    array_list,
+    title="",
+    axtitles=[],
+    figkwargs={},
+    imkwargs={},
+    make_gif=False,
+    add_cbar=True,
+    no_ticks = True,
+):
+    arrlen = len(array_list)
+    if arrlen<5:
+        nrows = 1
+        ncols = arrlen
+    else:
+        ncols = int(np.ceil(np.sqrt(len(array_list))))
+        nrows = ncols
+    figkwargs = {"nrows": nrows, "ncols": ncols, "layout":"compressed"} | figkwargs
+    fig, axs = plt.subplots(**figkwargs)
+    fig.suptitle(title, fontsize=16)
+    imlen = len(array_list[0])
+    idx = imlen // 2
+    if make_gif:
+        idx = 0
+
+    # add cross correlation coefficient
+    for ii, (axtit, axi) in enumerate(zip(axtitles, axs.flat)):
+        axi.set_title(axtit)
+
+    # Plot indiviudal plots
+    im_list = []
+    for rtemp, axi in zip(array_list, axs.flat):
+        im = axi.imshow(rtemp[idx], **imkwargs)
+        im_list.append(im)
+
+    # Add colorbar
+    if add_cbar:
+        # fig.subplots_adjust(right=0.85)
+        # cbar_ax = fig.add_axes([0.9, 0.25, 0.02, 0.5])
+        # fig.colorbar(im, cax=cbar_ax)
+        plt.colorbar(im, ax=axs)
+
+    # remove ticks
+    if no_ticks:
+        for axi in axs.flat:
+            axi.get_xaxis().set_visible(False)
+            axi.get_yaxis().set_visible(False)
+
+    @widgets.interact(f0=(0, imlen - 1, 1))
+    def update(
+        f0=idx,
+    ):
+        for rtemp, imo in zip(array_list, im_list):
+            imo.set_data(rtemp[f0])
+
+    if make_gif:
+        interval = make_gif if not isinstance(make_gif, int) else 1000
+        anim = animation.FuncAnimation(
+            fig, update, frames=np.arange(0, len(rtemp)), interval=interval
+        )
+        return anim
+    plt.show()
+    return fig, axs
+
 
 def fname_variant(variant):
     match variant:
@@ -510,7 +574,7 @@ def difference_map_plot(
         savefig(fig, config, fname)
 
 
-def pandda_bin_comp(delta_obj, strict, lax, config):
+def pandda_bin_comp(delta_obj, strict, lax, config=None):
     bins = np.logspace(-6, 0, 100)
     bins = np.concatenate([[0], bins])
     fig = plt.figure()
@@ -523,7 +587,8 @@ def pandda_bin_comp(delta_obj, strict, lax, config):
     plt.xlabel(r"Value Distribution $\Delta \rho$")
     plt.ylabel("Frequency")
     fname = "pandda_bins"
-    savefig(fig, config, fname)
+    if config: 
+        savefig(fig, config, fname)
 
 
 def pandda_actual_plot(alpha_xtrs, mean_global, mean_local, axs, title, config):
