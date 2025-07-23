@@ -7,6 +7,7 @@ from occupancy import *
 from plotting3d import *
 
 from generate_objects import run_scaleit
+from meteorize import scale_structure_factors
 
 
 def k2real(f):
@@ -61,7 +62,7 @@ def get_exp_structure_factors(ds_dark, ds_light, return_ds=False):
 
     f_dark[np.isnan(f_dark)] = 0
     f_light[np.isnan(f_light)] = 0
-
+    print(np.sum(np.abs(f_dark - f_light)))
     return f_dark, f_light
 
 
@@ -186,8 +187,7 @@ def pick_largest(
     thresh = np.min(result[idcs]) * thresh_fac
     mask_dog = (result) > thresh
     labeled_dog, total_num = ndimage.label(mask_dog)
-    labeled_dog = periodic_label_3d1(labeled_dog)
-    # labeled_dog =label_periodic_3d_consistent(result, structure)
+    # labeled_dog = periodic_label_3d1(labeled_dog)
 
     # np.unique(labeled_dog, return_counts=True)
     idcs_labels = {}
@@ -201,6 +201,17 @@ def pick_largest(
     for key in idcs_labels.keys():
         new_mask += labeled_dog == key
     return new_mask
+
+
+def mask_highest_values(
+    rho_delta,
+    perc_size=1e-4,
+):
+    # rho_delta=diffmap.
+    perc_high = np.percentile(rho_delta, 100 - perc_size)
+    perc_low = np.percentile(rho_delta, perc_size)
+    mask_truth = np.logical_or(rho_delta > perc_high, rho_delta < perc_low)
+    return mask_truth
 
 
 from scipy.ndimage import zoom
@@ -217,9 +228,66 @@ def ccp4_to_mask(mask_loc, target_shape):
     return mask
 
 
+def load_mask_config(diffmap, map_sampling, mask_loc_sphere, mask_loc_handcraft):
+
+    unit = np.array((diffmap.cell.a, diffmap.cell.b, diffmap.cell.c))
+    rho_diff = diffmap.to_3d_numpy_map(map_sampling=map_sampling)
+    step_size = np.array(rho_diff.shape) / unit
+    make_dict = lambda **kwargs: kwargs
+    mask_configs = {
+        "dog": {
+            "title": "DoG (Measurement)",
+            "loader": calculate_dog_filter_mask_v2,
+            "kwargs": make_dict(
+                nth_val=40 * 2**3,
+                target_shape=np.array(rho_diff.shape),
+                sigma=np.mean(step_size) * 1.75,
+                thresh_pos=0.35,
+                thresh_neg=0.5,
+            ),
+        },
+        "pseudo-z": {
+            "title": "largest and smallest values \n(0.01%) (PDB deposited)",
+            "loader": mask_highest_values,
+            "kwargs": make_dict(
+                perc_size=1e-2,
+            ),
+        },
+        "ball": {
+            "title": "Ball of Interest",
+            "loader": lambda x: ccp4_to_mask(mask_loc_sphere, rho_diff.shape),
+        },
+        "handpicked": {
+            "title": "Hand picked Mask",
+            "loader": lambda x: ccp4_to_mask(mask_loc_handcraft, rho_diff.shape),
+        },
+        "nomask": {
+            "title": "No Mask",
+            "loader": lambda x: np.ones(rho_diff.shape, bool),
+        },
+    }
+    return mask_configs
+
+
+def load_masks(diffmap, map_sampling, mask_configs, mask_types=None):
+    mask_types_available = list(mask_configs.keys())
+    mask_types = mask_types if mask_types is not None else mask_types_available
+    assert all([mask_type in mask_types_available for mask_type in mask_types])
+
+    rho_diff = diffmap.to_3d_numpy_map(map_sampling=map_sampling)
+    masks = {}
+    for key in mask_types:
+        config = mask_configs[key]
+        loader = config["loader"]
+        kwargs = config.get("kwargs", {})
+        masks[key] = loader(rho_diff, **kwargs)
+    return masks
+
+
 from plotting3d import val_distributions3
 
-def find_wasserstein_dip(xvalues,yvalues):
+
+def find_wasserstein_dip(xvalues, yvalues):
     yvalues = np.asarray(yvalues)
     xvalues = np.asarray(xvalues)
 
@@ -247,7 +315,6 @@ def find_wasserstein_dip(xvalues,yvalues):
     true_min_idx = start_idx + rel_min_idx
 
     return xvalues[true_min_idx]
-
 
 
 def get_hists(dens_xtrs, rho_dark, mask, bins):
@@ -278,3 +345,89 @@ def plot_hists(dhists, lhists, wdists, bin_centers, alphas):
         ax.set_title(f"Alpha: {alpha:.2f} \n Wasserstein: {wdists[ii]:.4f}")
     ax.legend()
     return fig, axs
+
+
+from meteorize import calc_direct_difference, fetch_without_meta, fetch_tv_denoised
+from meteor.diffmaps import (
+    compute_difference_map,
+    max_negentropy_kweighted_difference_map,
+)
+from meteor import rsmap
+
+
+def make_diffmap_config(map_sampling: float):
+    make_dict = lambda **kwargs: kwargs
+    diffmap_config = make_dict(
+        direct_realspace=make_dict(
+            title="Direct Realspace Subtraction",
+            loader=calc_direct_difference,
+            kwargs=make_dict(map_sampling=map_sampling),
+        ),
+        vanilla_diffmap=make_dict(
+            title="Vanilla Isomorphous DiffMap",
+            loader=compute_difference_map,
+            kwargs={},
+        ),
+        kweighted=make_dict(
+            title="K-weighted Difference Map",
+            loader=fetch_without_meta,
+            kwargs=make_dict(diffmap_maker=max_negentropy_kweighted_difference_map),
+        ),
+        tv=make_dict(
+            title="TV-denoised Difference Map",
+            loader=fetch_tv_denoised,
+        ),
+    )
+    return diffmap_config
+
+
+def loading_diffmaps(
+    map_light: rsmap.Map,
+    map_dark: rsmap.Map,
+    changing_bit: str,
+    map_sampling: float,
+    force_compute=False,
+):
+    """
+    Loads the difference maps for the dark and light datasets.
+    """
+    diffmap_config = make_diffmap_config(map_sampling)
+    map_types = [
+        "direct_realspace",
+        "vanilla_diffmap",
+        "kweighted",
+        "tv",
+    ]
+    mtz_name = f"photolyase{changing_bit.split('/')[-1]}.mtz"
+    diffmaps = {}
+    if not os.path.exists(mtz_name) or force_compute:
+        print(f"Calculating from maps")
+        for key in map_types:
+            config = diffmap_config[key]
+            loader = config["loader"]
+            kwargs = config.get("kwargs", {})
+            diffmaps[key] = loader(map_light, map_dark, **kwargs)
+
+        diffmaps_mtz = rs.DataSet(diffmaps["tv"])
+        diffmaps_mtz = diffmaps_mtz.rename(
+            columns=lambda x: f"{x}_tv" if x != "index" else x
+        )
+        for key in diffmaps.keys():
+            if key != "tv":
+                for col in diffmaps[key].columns:
+                    if col != "index":
+                        diffmaps_mtz[f"{col}_{key}"] = diffmaps[key][col]
+        rs.DataSet(diffmaps_mtz).write_mtz(mtz_name)
+
+    else:
+        print(f"Reading from {mtz_name}")
+        diffmaps_mtz = rs.read_mtz(mtz_name)
+        for key in map_types:
+            diffmap = rsmap.Map(
+                diffmaps_mtz,
+                amplitude_column=f"F_{key}",
+                phase_column=f"PHI_{key}",
+                uncertainty_column=f"SigF_{key}",
+            )
+            diffmaps[key] = diffmap
+    return diffmaps, diffmap_config
