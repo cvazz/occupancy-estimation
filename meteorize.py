@@ -20,6 +20,9 @@ from meteor.utils import cut_resolution
 from meteor import rsmap
 from scipy.ndimage import label, generate_binary_structure
 
+import logging
+logger = logging.getLogger(__name__)
+
 ################################################################################
 ###################  Scaling  ##################################################
 ################################################################################
@@ -40,13 +43,13 @@ def scale_structure_factors(ds_dark, ds_light, dark_columns, light_columns):
     }
 
     ds_scaleit = rs.DataSet(cell=ds_dark.cell, spacegroup=ds_dark.spacegroup)
-    print(ds_dark.columns)
-    print(dark_f)
+    logger.info(f"Dark columns: {ds_dark.columns}")
+    logger.info(f"Dark amplitude column: {dark_f}")
     ds_scaleit[out_columns["dark_f"]] = ds_dark[dark_f]
     ds_scaleit[out_columns["dark_sig"]] = ds_dark[dark_sig]
     ds_scaleit[out_columns["light_f"]] = ds_light[light_f]
     ds_scaleit[out_columns["light_sig"]] = ds_light[light_sig]
-    print("cols here", ds_scaleit.columns)
+    logger.info(f"Scaled dataset columns: {ds_scaleit.columns}")
 
     ds_scaleit = run_scaleit(ds_scaleit, None, False, columns=out_columns)
 
@@ -56,8 +59,6 @@ def scale_structure_factors(ds_dark, ds_light, dark_columns, light_columns):
     dark_columns2["uncertainty_column"] = out_columns["light_sig"]
     light_columns2["amplitude_column"] = out_columns["dark_f"]
     light_columns2["uncertainty_column"] = out_columns["dark_sig"]
-
-    print("cols", ds_scaleit.columns)
 
     return ds_scaleit, light_columns2, dark_columns2
 
@@ -140,11 +141,27 @@ def many_negsum(
     map_sampling: float,
     masks: np.ndarray = None,
     detailed: bool = False,
+    return_neg_sum: bool = False,
 ):
     n_largest = 4
     arrlen = len(rho_xtrs)
-    if len(masks) > 1_000:
-        print("Warning: Many masks")
+    masklen = len(masks)
+    if masklen > 1000:
+        logger.warning(f"Warning: Many masks ({masklen}) provided, this may take a while.")
+    if masklen>3000:
+        logger.error(f"Error: Too many masks ({masklen}), please reduce the number of masks.")
+        
+        value_tuple = ( np.nan, np.nan, np.nan, np.nan)
+        if detailed and return_neg_sum:
+            return (value_tuple, 
+                    np.empty((arrlen, len(masks)))*np.nan,
+                    np.empty(len(masks))*np.nan)
+        elif detailed:
+            return value_tuple
+        if return_neg_sum:
+            return np.empty((arrlen, len(masks)))*np.nan
+
+
     weight = np.empty(len(masks))
     for ii, mask in enumerate(masks):
         weight[ii] = np.sum(mask) ** 2
@@ -156,6 +173,7 @@ def many_negsum(
         for jj, mask in enumerate(masks):
             neg_sum[ii, jj] = np.sum(density[mask][density[mask] < 0])
 
+
     intersection_points = np.empty(len(masks))
     for jj, mask in enumerate(masks):
         intersect, angle = get_intersect_and_angle(
@@ -165,6 +183,7 @@ def many_negsum(
     ma = np.ma.MaskedArray(intersection_points, mask=np.isnan(intersection_points))
     intersection_average = np.ma.average(ma, weights=weight)
     intersection_std = np.sqrt(np.cov(ma, aweights=weight))
+    # calculate standard deviation with weights, masking NaNs
     print(f"Intersection Average: {intersection_average:.2f} ± {intersection_std:.2f}")
 
     intersection_average_inv = np.ma.average(2 / ma, weights=weight)
@@ -172,15 +191,18 @@ def many_negsum(
     print(
         f"Intersection Average Inverse: {intersection_average_inv:.2f} ± {intersection_std_inv:.2f}"
     )
-    if detailed:
-        return (
+    value_tuple = (
             intersection_average,
             intersection_std,
             intersection_average_inv,
             intersection_std_inv,
         )
-    if False:
-        return intersection_average, intersection_std, neg_sum, intersection_points
+    if detailed and return_neg_sum:
+        return value_tuple, neg_sum, intersection_points
+    elif detailed:
+        return value_tuple
+    if return_neg_sum:
+        return neg_sum
 
     return intersection_average, intersection_std
 
@@ -224,7 +246,10 @@ def fetch_tv_denoised(map_light, map_dark):
 def find_largest_blobs(
     diffmap: rsmap.Map,
     map_sampling: float,
-    threshold: float = 0.3,
+    *,
+    threshold: float | None = None,
+    thresh_pos: float | None = None,
+    thresh_neg: float | None = None,
     minimum_size: int = 3,
 ):
     """
@@ -242,9 +267,15 @@ def find_largest_blobs(
     max_val = np.max(diffmap_np)
     min_val = np.min(diffmap_np)
 
+    # add assertions allowing only for thresh_pos and thresh_neg
+    # or threshold, not both
+    if threshold is not None:
+        thresh_pos = threshold
+        thresh_neg = threshold
+
     # Thresholds for positive and negative blobs
-    pos_thresh = max_val * threshold
-    neg_thresh = min_val * threshold
+    pos_thresh = max_val * thresh_pos
+    neg_thresh = min_val * thresh_neg
 
     # Create masks for positive and negative blobs
     pos_mask = diffmap_np >= pos_thresh
