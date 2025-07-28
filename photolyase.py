@@ -8,6 +8,8 @@ from plotting3d import *
 
 from generate_objects import run_scaleit
 from meteorize import scale_structure_factors
+import logging
+logger = logging.getLogger(__name__)
 
 
 def k2real(f):
@@ -272,7 +274,9 @@ def load_mask_config(diffmap, map_sampling, mask_loc_sphere, mask_loc_handcraft)
 def load_masks(diffmap, map_sampling, mask_configs, mask_types=None):
     mask_types_available = list(mask_configs.keys())
     mask_types = mask_types if mask_types is not None else mask_types_available
-    assert all([mask_type in mask_types_available for mask_type in mask_types])
+    assert all(
+        [mask_type in mask_types_available for mask_type in mask_types]
+    ), f"only allows the following mask types: {mask_types_available}"
 
     rho_diff = diffmap.to_3d_numpy_map(map_sampling=map_sampling)
     masks = {}
@@ -284,15 +288,16 @@ def load_masks(diffmap, map_sampling, mask_configs, mask_types=None):
     return masks
 
 
-from plotting3d import val_distributions3
+from plotting3d import val_distributions3, val_distributions_inv
 
 
 def find_wasserstein_dip(xvalues, yvalues):
     yvalues = np.asarray(yvalues)
     xvalues = np.asarray(xvalues)
+    
 
     if yvalues.shape != xvalues.shape:
-        raise ValueError("yvalues and xvalues must have the same shape.")
+        raise ValueError("yvalues and xvalues must have the same shape. Received shapes: %s and %s instead", yvalues.shape, xvalues.shape)
 
     # Step 1: Find the global minimum
     min_idx = np.argmin(yvalues)
@@ -315,6 +320,25 @@ def find_wasserstein_dip(xvalues, yvalues):
     true_min_idx = start_idx + rel_min_idx
 
     return xvalues[true_min_idx]
+
+
+def get_hists_inverted(dens_xtrs, rho_dark, mask_pos, mask_neg, bins):
+    dhists = []
+    lhists = []
+    wdists = []
+    for dens_xtr in dens_xtrs:
+        wasser_dist, bin_centers, hist_dark, hist_light = val_distributions_inv(
+            rho_dark,
+            dens_xtr,
+            mask_neg.astype(bool),
+            mask_pos.astype(bool),
+            bins,
+        )
+        wdists.append(wasser_dist)
+        lhists.append(hist_light)
+        dhists.append(hist_dark)
+
+    return dhists, lhists, wdists, bin_centers
 
 
 def get_hists(dens_xtrs, rho_dark, mask, bins):

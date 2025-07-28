@@ -2,7 +2,7 @@ import numpy as np
 import matplotlib.pyplot as plt
 from scipy.ndimage import gaussian_filter
 import pandas as pd
-
+import logging
 # my imports
 from occupancy import *
 from plotting3d import *
@@ -22,8 +22,7 @@ def get_intersect_and_angle(
     res_2 = stats.linregress(alpha_invs[m2], -neg_sum[m2])
     intersection = (res_2.intercept - res_1.intercept) / (res_1.slope - res_2.slope)
     # print("intersection slopes", res_1.slope,  res_2.slope, intersection, 2/intersection)
-    if print_it:
-        print(f"intersection point, {2/intersection:.3f} ({intersection:.2f})")
+    logging.debug(f"intersection point, {2/intersection:.3f} ({intersection:.2f})")
 
     angle_raw = (res_1.slope - res_2.slope) / (1 + res_1.slope * res_2.slope)
     angle = np.degrees(np.arctan(np.abs(angle_raw)))

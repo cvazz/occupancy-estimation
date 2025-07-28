@@ -4,6 +4,10 @@ from scipy.stats import pearsonr
 from scipy import ndimage
 from scipy import stats
 import sys, os
+import logging
+
+logging.basicConfig(level=logging.INFO)
+logger = logging.getLogger(__name__)
 
 # get fig folder
 from inspect import getsourcefile
@@ -473,8 +477,10 @@ def run_scaleit(
     )
 
     os.system("chmod +x %s" % (script_scaleit))
-    print("Running scaleit, see %s" % (script_scaleit), file=log)
+    logger.info("Running scaleit, see %s" % (script_scaleit))
+    print("Running scaleit, see %s" % (script_scaleit))
     os.system("./%s" % (script_scaleit))
+    print("scaleit done, see %s" % (script_scaleit))
 
     df = rs.read_mtz(mtz_fromscaleit)
 
