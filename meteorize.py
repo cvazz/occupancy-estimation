@@ -1,27 +1,17 @@
 import numpy as np
-import pandas as pd
-import gemmi
-import matplotlib.pyplot as plt
-import meteor
 import reciprocalspaceship as rs
 
 
-from generate_objects import run_scaleit
-
-from meteor.diffmaps import (
-    compute_difference_map,
-    max_negentropy_kweighted_difference_map,
-)
-from meteor.tv import tv_denoise_difference_map
-
-from meteor.utils import cut_resolution
 
 
 from meteor import rsmap
+from meteor.tv import tv_denoise_difference_map
+from meteor.diffmaps import max_negentropy_kweighted_difference_map,
+from meteor.scale import scale_maps
+
 from scipy.ndimage import label, generate_binary_structure
 
 import logging
-
 logger = logging.getLogger(__name__)
 
 ################################################################################
@@ -72,7 +62,6 @@ def scale_structure_factors(ds_dark, ds_light, dark_columns, light_columns):
 
     return ds_scaleit, light_columns2, dark_columns2
 
-
 def get_scaled_maps(ds_dark, ds_light):
     make_dict = lambda **x: x
     dark_columns = make_dict(
@@ -84,16 +73,14 @@ def get_scaled_maps(ds_dark, ds_light):
     light_columns = make_dict(
         amplitude_column="F", uncertainty_column="SIGF", phase_column="PHIF-model"
     )
-    ds_comb, dark_columns_out, light_columns_out = scale_structure_factors(
-        ds_dark, ds_light, dark_columns, light_columns
-    )
+    ds_light[light_columns["phase_column"]] = ds_dark[dark_columns["phase_column"]]
+    unscaled_dark = rsmap.Map(ds_dark, **dark_columns)
+    unscaled_light = rsmap.Map(ds_light, **light_columns)
+    scaled_light = scale_maps(
+        reference_map=unscaled_dark, map_to_scale=unscaled_light)
+    map_dark = unscaled_dark
+    map_light = scaled_light
 
-    ds_comb[dark_columns["phase_column"]] = ds_dark[dark_columns["phase_column"]]
-    dark_columns_out["phase_column"] = dark_columns["phase_column"]
-    light_columns_out["phase_column"] = light_columns["phase_column"]
-
-    map_dark = rsmap.Map(ds_comb, **dark_columns_out)
-    map_light = rsmap.Map(ds_comb, **light_columns_out)
     return map_dark, map_light
 
 
@@ -141,6 +128,7 @@ def negsum_meteor(
     return neg_sum
 
 
+
 from compare_conds import get_intersect_and_angle
 
 
@@ -154,6 +142,8 @@ def many_negsum(
     return_neg_sum: bool = False,
     diffmap: rsmap.Map = None,
 ):
+    n_largest = 4
+    arrlen = len(rho_xtrs)
 
     if len(masks) < 1:
         logger.error(f"Error: No masks provided")
@@ -185,15 +175,13 @@ def many_negsum(
             f"Too many masks ({len(weight)}), selecting {max_masks} with the largest diffmap contribution."
         )
         sorted_indices = np.argsort(weight)[-max_masks:]
-        logger.info(f"Selected masks: {sorted_indices[sorted_indices>max_masks]}")
+        logger.debug(f"Selected masks: {sorted_indices[sorted_indices>max_masks]}")
         # logger.info(masks.shape)
         # masks.shape
 
         masks = np.array(masks)[sorted_indices]
         weight = weight[sorted_indices]
 
-    n_largest = 4
-    arrlen = len(rho_xtrs)
 
     neg_sum = np.empty((arrlen, len(masks)))
     for ii, density in enumerate(rho_xtrs):
