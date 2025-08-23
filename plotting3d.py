@@ -193,6 +193,7 @@ def slice_3d(
         return anim
     return fig
 
+
 def panels_3d(
     array_list,
     title="",
@@ -201,16 +202,16 @@ def panels_3d(
     imkwargs={},
     make_gif=False,
     add_cbar=True,
-    no_ticks = True,
+    no_ticks=True,
 ):
     arrlen = len(array_list)
-    if arrlen<5:
+    if arrlen < 5:
         nrows = 1
         ncols = arrlen
     else:
         ncols = int(np.ceil(np.sqrt(len(array_list))))
         nrows = ncols
-    figkwargs = {"nrows": nrows, "ncols": ncols, "layout":"compressed"} | figkwargs
+    figkwargs = {"nrows": nrows, "ncols": ncols, "layout": "compressed"} | figkwargs
     fig, axs = plt.subplots(**figkwargs)
     fig.suptitle(title, fontsize=16)
     imlen = len(array_list[0])
@@ -587,7 +588,7 @@ def pandda_bin_comp(delta_obj, strict, lax, config=None):
     plt.xlabel(r"Value Distribution $\Delta \rho$")
     plt.ylabel("Frequency")
     fname = "pandda_bins"
-    if config: 
+    if config:
         savefig(fig, config, fname)
 
 
@@ -722,6 +723,41 @@ def density_matching(f_xtrs, alpha_xtrs, mask_pks_neg, config):
     plot_density_match(
         root_voxel, config, "Density Matching (Voxel)", "density_matching_voxel"
     )
+
+
+def val_distributions_inv(
+    density_dark, density_light, mask_neg, mask_pos, bins=None, details=True
+):
+    bins = bins if bins is not None else np.arange(-1, 1.4, 0.005)
+    bin_centers = bins[:-1] + np.diff(bins)
+    # pos_blobs, neg_blobs = find_largest_blobs(diffmap, map_sampling, threshold=thresh)
+    # mask_neg = neg_blobs>0
+    # mask_pos = pos_blobs>0
+    hist_dark_neg, _ = np.histogram(
+        density_dark[mask_neg],
+        bins=bins,
+    )
+    hist_dark_pos, _ = np.histogram(
+        density_dark[mask_pos],
+        bins=bins,
+    )
+    rescale = np.sum(hist_dark_pos) / np.sum(hist_dark_neg)
+    hist_dark_inverted = hist_dark_neg * rescale + hist_dark_pos / rescale
+
+    mask_comb = np.logical_or(mask_neg, mask_pos)
+    hist_light, _ = np.histogram(
+        density_light[mask_comb].ravel(),
+        bins=bins,
+    )
+    if (hist_light == 0).all():
+        hist_light[0] = 1
+    # ax.set_xscale('symlog',linthresh=1e-3)
+    wasser_dist = wasserstein_distance(
+        bins[:-1], bins[:-1], hist_dark_inverted, hist_light
+    )
+    if details:
+        return wasser_dist, bin_centers, hist_dark_inverted, hist_light
+    return wasser_dist
 
 
 def val_distributions3(density_dark, density_light, mask, bins=None, details=True):

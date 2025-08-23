@@ -1,13 +1,14 @@
 import numpy as np
 import matplotlib.pyplot as plt
-from scipy.ndimage import gaussian_filter
 import pandas as pd
-import logging
 # my imports
-from occupancy import *
-from plotting3d import *
-from generate_objects import *
+from occupancy import *  # noqa
+from plotting3d import * # noqa 
+from generate_objects import * # noqa
+from scipy import stats
 
+import logging
+logger = logging.getLogger(__name__)
 
 def get_intersect_and_angle(
     alpha_invs,
@@ -22,7 +23,7 @@ def get_intersect_and_angle(
     res_2 = stats.linregress(alpha_invs[m2], -neg_sum[m2])
     intersection = (res_2.intercept - res_1.intercept) / (res_1.slope - res_2.slope)
     # print("intersection slopes", res_1.slope,  res_2.slope, intersection, 2/intersection)
-    logging.debug(f"intersection point, {2/intersection:.3f} ({intersection:.2f})")
+    logger.debug(f"intersection point, {2/intersection:.3f} ({intersection:.2f})")
 
     angle_raw = (res_1.slope - res_2.slope) / (1 + res_1.slope * res_2.slope)
     angle = np.degrees(np.arctan(np.abs(angle_raw)))
@@ -86,20 +87,9 @@ def main(alpha_xtrs, alpha_trues, noise_levels):
                 panda_res,
             ]
             rows.append(row)
-            # print("hi")
-            # print(panda_res, marius_res)
-            # neg_sum_explosion(alpha_invs, neg_sum, config, 7, 3)
-            # plt.show()
-            # fig,axs = plt.subplots(1,2)
-            # pandda_actual_plot(alpha_xtrs, mean_global_strict, mean_local_strict, axs, "", config)
-            # plt.show()
 
     res_log = pd.DataFrame(data=rows, columns=cols)
     return res_log, rows
-    plt.figure()
-    plt.plot(res_log.true, res_log.neg_sum)
-    plt.plot(res_log.true, res_log.pandda)
-    plt.show()
 
 
 if __name__ == "__main__":
