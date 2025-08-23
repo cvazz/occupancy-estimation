@@ -288,6 +288,8 @@ def load_masks(diffmap, map_sampling, mask_configs, mask_types=None):
     return masks
 
 
+
+
 from plotting3d import val_distributions3, val_distributions_inv
 
 
@@ -382,11 +384,11 @@ from meteor import rsmap
 def make_diffmap_config(map_sampling: float):
     make_dict = lambda **kwargs: kwargs
     diffmap_config = make_dict(
-        direct_realspace=make_dict(
-            title="Direct Realspace Subtraction",
-            loader=calc_direct_difference,
-            kwargs=make_dict(map_sampling=map_sampling),
-        ),
+        # direct_realspace=make_dict(
+        #     title="Direct Realspace Subtraction",
+        #     loader=calc_direct_difference,
+        #     kwargs=make_dict(map_sampling=map_sampling),
+        # ),
         vanilla_diffmap=make_dict(
             title="Vanilla Isomorphous DiffMap",
             loader=compute_difference_map,
@@ -408,9 +410,12 @@ def make_diffmap_config(map_sampling: float):
 def loading_diffmaps(
     map_light: rsmap.Map,
     map_dark: rsmap.Map,
-    changing_bit: str,
-    map_sampling: float,
+    *, 
+    map_sampling: float= 3,
+    saveloc: str  = None,
+    changing_bit: str = None,
     force_compute=False,
+    
 ):
     """
     Loads the difference maps for the dark and light datasets.
@@ -422,7 +427,11 @@ def loading_diffmaps(
         "kweighted",
         "tv",
     ]
-    mtz_name = f"photolyase{changing_bit.split('/')[-1]}.mtz"
+    assert (saveloc is None) != (changing_bit is None), "Either saveloc or changing_bit must be provided, but not both."
+    if saveloc:
+        mtz_name = saveloc
+    else:
+        mtz_name = f"photolyase{changing_bit.split('/')[-1]}.mtz"
     diffmaps = {}
     if not os.path.exists(mtz_name) or force_compute:
         print(f"Calculating from maps")

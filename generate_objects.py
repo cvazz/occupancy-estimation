@@ -403,6 +403,7 @@ def generate_obj_cistrans_v2(occupancy, noise_level, no_negs=False, scaleit=True
 ################# scaleit###############
 def write_scaleit_input(mtz_in, b_scaling, low_res, high_res, columns):
     temp_folder = "tmp/"
+    temp_folder = "./"
     os.makedirs(temp_folder, mode=0o777, exist_ok=True)
     mtz_out = temp_folder + "from_scaleit.mtz"
     script_out = temp_folder + "launch_scaleit.sh"
