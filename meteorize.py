@@ -1,17 +1,19 @@
 import numpy as np
 import reciprocalspaceship as rs
 
-
-
+from scipy.ndimage import label, generate_binary_structure
+from scipy.stats import pearsonr
 
 from meteor import rsmap
 from meteor.tv import tv_denoise_difference_map
-from meteor.diffmaps import max_negentropy_kweighted_difference_map,
+from meteor.diffmaps import max_negentropy_kweighted_difference_map
 from meteor.scale import scale_maps
 
-from scipy.ndimage import label, generate_binary_structure
+from compare_conds import get_intersect_and_angle
+from generate_objects import run_scaleit
 
 import logging
+
 logger = logging.getLogger(__name__)
 
 ################################################################################
@@ -62,7 +64,8 @@ def scale_structure_factors(ds_dark, ds_light, dark_columns, light_columns):
 
     return ds_scaleit, light_columns2, dark_columns2
 
-def get_scaled_maps(ds_dark, ds_light):
+
+def get_photolyase_maps(ds_dark, ds_light):
     make_dict = lambda **x: x
     dark_columns = make_dict(
         amplitude_column="F-obs-filtered",
@@ -76,8 +79,7 @@ def get_scaled_maps(ds_dark, ds_light):
     ds_light[light_columns["phase_column"]] = ds_dark[dark_columns["phase_column"]]
     unscaled_dark = rsmap.Map(ds_dark, **dark_columns)
     unscaled_light = rsmap.Map(ds_light, **light_columns)
-    scaled_light = scale_maps(
-        reference_map=unscaled_dark, map_to_scale=unscaled_light)
+    scaled_light = scale_maps(reference_map=unscaled_dark, map_to_scale=unscaled_light)
     map_dark = unscaled_dark
     map_light = scaled_light
 
@@ -88,26 +90,48 @@ def get_scaled_maps(ds_dark, ds_light):
 ###################  Occupancy Estimation  #####################################
 ################################################################################
 
-from scipy.stats import pearsonr
-
 
 def pandda(
     map_dark: rsmap.Map,
     map_xtrs: list[rsmap.Map],
-    mask_pks: np.ndarray,
+    mask_region_of_change: np.ndarray,
     map_sampling: float,
 ):
+    """
+    Compute local and global Pearson correlation coefficients between a reference map and a list of experimental maps.
+
+    Parameters
+    ----------
+    map_dark : rsmap.Map
+        The reference (dark) map.
+    map_xtrs : list of rsmap.Map
+        List of experimental maps to compare against the reference map.
+    mask_region_of_change : np.ndarray
+        Boolean mask indicating the region of change within the map.
+    map_sampling : float
+        The sampling rate for converting maps to 3D numpy arrays.
+
+    Returns
+    -------
+    mean_local : np.ndarray
+        Array of local Pearson correlation coefficients (within the region of change) for each experimental map.
+    mean_global : np.ndarray
+        Array of global Pearson correlation coefficients (over the entire map) for each experimental map.
+    """
+
     rho_dark = map_dark.to_3d_numpy_map(map_sampling=map_sampling)
     mean_global = np.empty(len(map_xtrs))
     mean_local = np.empty(len(map_xtrs))
     for ii, map_xtr in enumerate(map_xtrs):
         rho_xtr = map_xtr.to_3d_numpy_map(map_sampling=map_sampling)
         mean_global[ii] = pearsonr(
-            rho_xtr[~mask_pks].flatten(), rho_dark[~mask_pks].flatten()
+            rho_xtr[~mask_region_of_change].flatten(),
+            rho_dark[~mask_region_of_change].flatten(),
         )[0]
         mean_global[ii] = pearsonr(rho_xtr.flatten(), rho_dark.flatten())[0]
         mean_local[ii] = pearsonr(
-            rho_xtr[mask_pks].flatten(), rho_dark[mask_pks].flatten()
+            rho_xtr[mask_region_of_change].flatten(),
+            rho_dark[mask_region_of_change].flatten(),
         )[0]
     return mean_local, mean_global
 
@@ -128,9 +152,49 @@ def negsum_meteor(
     return neg_sum
 
 
+class NotEnoughMasksError(Exception):
+    pass
+from scipy.stats import stats
+def get_fits2(neg_sum, alpha_invs, n_largest, return_all=False):
+    a_sorted = np.argsort(alpha_invs)
+    m_lowest = a_sorted <= n_largest
+    m_biggest = a_sorted >= len(a_sorted) - n_largest - 2
+    res_lowest = stats.linregress(alpha_invs[m_lowest], neg_sum[m_lowest])
+    res_biggest = stats.linregress(alpha_invs[m_biggest], neg_sum[m_biggest])
+    np.linspace(np.min(alpha_invs), np.max(alpha_invs), 5)
+    fit_lowest = res_lowest.intercept + res_lowest.slope * alpha_invs
+    fit_biggest = res_biggest.intercept + res_biggest.slope * alpha_invs
 
-from compare_conds import get_intersect_and_angle
+    # intersection = (res_2.tercept-res_1.intercept) / (res_1.slope-res_2.slope)
+    intersection = (res_biggest.intercept - res_lowest.intercept) / (
+        res_lowest.slope - res_biggest.slope
+    )
+    highest_low = np.max(alpha_invs[m_lowest])
+    lowest_high = np.min(alpha_invs[m_biggest])
+    if intersection > lowest_high or intersection < highest_low:
+        logger.warning(
+            f"Intersection at {intersection:.2f} should be between {highest_low:.2f} and {lowest_high:.2f}"
+        )
+    else:
+        logger.debug(
+            f"Intersection at {intersection:.2f} is between {highest_low:.2f} and {lowest_high:.2f}"
+        )
+    hlf, llf = 1, 1
+    if (intersection < highest_low * hlf or intersection > lowest_high * llf) and not return_all:
+        logger.warning("    Intersection declared invalid")
+        intersection = np.nan
+    if intersection < highest_low * hlf:
+        logger.warning(
+            f"Intersection declared invalid, because it is greater than {highest_low * hlf:.2f}"
+        )
+    if intersection > lowest_high * llf:
+        logger.warning(
+            f"Intersection declared invalid, because it is less than {lowest_high * llf:.2f}"
+        )
+    if intersection < 0:
+        logger.error("Negative intersection found, this should not happen")
 
+    return fit_lowest, fit_biggest, intersection
 
 def many_negsum(
     rho_xtrs: list[rsmap.Map],
@@ -138,27 +202,18 @@ def many_negsum(
     *,
     map_sampling: float,
     masks: np.ndarray = None,
-    detailed: bool = False,
-    return_neg_sum: bool = False,
     diffmap: rsmap.Map = None,
+    return_data: bool = False,
 ):
-    n_largest = 4
+    n_largest = 3
     arrlen = len(rho_xtrs)
 
     if len(masks) < 1:
-        logger.error(f"Error: No masks provided")
-        value_tuple = (np.nan, np.nan, np.nan, np.nan)
-        if detailed and return_neg_sum:
-            return (
-                value_tuple,
-                np.empty((arrlen, len(masks))) * np.nan,
-                np.empty(len(masks)) * np.nan,
-                np.empty(len(masks)) * np.nan,
-            )
-        elif detailed:
-            return value_tuple, (np.nan, np.nan)
-        if return_neg_sum:
-            return np.empty((arrlen, len(masks))) * np.nan
+        logger.error(f"Error: No masks provided, masks has {len(masks)}  .")
+        raise NotEnoughMasksError(
+            f"Error: No masks provided, masks has {len(masks)}  ."
+        )
+
     weight = np.empty(len(masks))
     if diffmap is not None:
         diffmap_density = diffmap.to_3d_numpy_map(map_sampling=map_sampling)
@@ -176,12 +231,9 @@ def many_negsum(
         )
         sorted_indices = np.argsort(weight)[-max_masks:]
         logger.debug(f"Selected masks: {sorted_indices[sorted_indices>max_masks]}")
-        # logger.info(masks.shape)
-        # masks.shape
 
         masks = np.array(masks)[sorted_indices]
         weight = weight[sorted_indices]
-
 
     neg_sum = np.empty((arrlen, len(masks)))
     for ii, density in enumerate(rho_xtrs):
@@ -190,47 +242,85 @@ def many_negsum(
             neg_sum[ii, jj] = np.sum(density[mask][density[mask] < 0])
 
     intersection_points = np.empty(len(masks))
+    from matplotlib import pyplot as plt
+    colors = plt.cm.viridis(np.linspace(0, 1, len(masks)))
     for jj, mask in enumerate(masks):
-        intersect, angle = get_intersect_and_angle(
-            extrapolation_factors, neg_sum[:, jj], n_largest
+        fit1, fit2, intersect = get_fits2(
+            neg_sum[:, jj]/np.min(neg_sum[:, jj]), extrapolation_factors, n_largest
         )
         intersection_points[jj] = intersect
+
+        if np.max(np.abs(fit1 - fit2)) < 0.1:
+            # plt.figure()
+            # plt.plot(extrapolation_factors,fit1, color = colors[jj])
+            # plt.plot(extrapolation_factors,fit2,color = colors[jj])
+            logger.warning(f"Fits are parallel (would have been {intersect:.2f}, {np.min(fit1):.1f}, {np.max(fit1):.1f}, {np.min(fit2):.1f},  {np.max(fit2):.1f} )") 
+            intersection_points[jj] = np.nan
+            # plt.show()
+    return neg_sum, intersection_points, weight
+
+
+def process_many_negsum(intersection_points, weight, masks=None):
+
     # calculate standard deviation with weights, masking NaNs
     finite_intersections = np.isfinite(intersection_points)
-    masked_intersection = intersection_points[finite_intersections]
+    masked_intersect = intersection_points[finite_intersections]
     masked_weight = weight[finite_intersections]
-    intersection_average = np.ma.average(masked_intersection, weights=masked_weight)
-    intersection_std = np.sqrt(np.cov(masked_intersection, aweights=masked_weight))
-    logger.info(
-        f"Intersection Average 2: {intersection_average:.2f} ± {intersection_std:.2f}"
-    )
-    intersection_average_inv = np.ma.average(
-        2 / masked_intersection, weights=masked_weight
-    )
-    intersection_std_inv = np.sqrt(
-        np.cov(2 / masked_intersection, aweights=masked_weight)
-    )
-    logger.info(
-        f"Intersection Average Inverse: {intersection_average_inv:.2f} ± {intersection_std_inv:.2f}"
-    )
-    value_tuple = (
-        intersection_average,
-        intersection_std,
-        intersection_average_inv,
-        intersection_std_inv,
-    )
-    mask_tuple = np.sum(np.asarray(masks)[finite_intersections]), np.sum(masked_weight)
-    if detailed and return_neg_sum:
-        return value_tuple, neg_sum, intersection_points, weight
-    elif detailed:
-        return value_tuple, mask_tuple
-    if return_neg_sum:
-        return neg_sum
+    print("Beware of your choice")
+    intersection_average = np.average(masked_intersect, weights=masked_weight)
+    intersection_std = np.sqrt(np.cov(masked_intersect, aweights=masked_weight))
+    intersection_average_inv = np.average(1 / masked_intersect, weights=masked_weight)
+    intersection_std_inv = np.sqrt(np.cov(1 / masked_intersect, aweights=masked_weight))
 
-    return (
-        intersection_average,
-        intersection_std,
+    logstart = "Intersection Average"
+    log_msg = f"{logstart}: {intersection_average:.2f} ± {intersection_std:.2f}"
+    log_msg = f"Inverse: {intersection_average_inv:.2f} ± {intersection_std_inv:.2f}"
+    logger.info(log_msg)
+    if masks is not None:
+        if len(masks) == len(intersection_points):
+            masks = np.asarray(masks)[finite_intersections]
+    mask_sum = np.sum(masks) if masks is not None else None
+    weight_sum = np.sum(masked_weight)
+    logger.info(f"Total mask sum: {mask_sum}, Total weight sum: {weight_sum}")
+    output_dict = {
+        "intersection_average": intersection_average,
+        "intersection_std": intersection_std,
+        "intersection_average_inv": intersection_average_inv,
+        "intersection_std_inv": intersection_std_inv,
+        "mask_counts": mask_sum,
+        "mask_weight": weight_sum,
+    }
+    share_nan = 1-np.sum(finite_intersections)/len(finite_intersections) 
+    if share_nan > 0.2:
+        logger.error(f"Many NaN values in intersection points {share_nan:.2f} , consider adjusting your analysis.")
+    share_nan_weight = 1 - np.sum(masked_weight) / np.sum(weight)
+    logger.warning(f"Many NaN values in intersection points (weighted) {share_nan_weight:.2f} out of 1")
+
+    return output_dict
+
+
+def calculate_and_process_many_negsum(
+    rho_xtrs: list[rsmap.Map],
+    extrapolation_factors: list[float],
+    *,
+    map_sampling: float,
+    masks: np.ndarray = None,
+    diffmap: rsmap.Map = None,
+    return_data: bool = False,
+):
+
+    neg_sum, intersection_points, weight = many_negsum(
+        rho_xtrs,
+        extrapolation_factors=extrapolation_factors,
+        map_sampling=map_sampling,
+        masks=masks,
+        diffmap=diffmap,
+        return_data=return_data,
     )
+    if return_data:
+        return neg_sum, intersection_points, weight
+
+    return process_many_negsum(intersection_points, weight, masks=masks)
 
 
 ################################################################################
@@ -418,6 +508,115 @@ def find_most_positive_blobs_np(
 
     return pos_blob_masks
 
+def find_most_positive_blobs_rmsd(
+    diffmap_np: np.ndarray,
+    *,
+    threshold: float,
+    minimum_size: int,
+    maximum_quantity: int,
+):
+    threshold2 = threshold*np.max(diffmap_np)
+    thresh_pos = np.percentile(diffmap_np, 99.9) 
+    if threshold2<thresh_pos:
+        threshold2 = thresh_pos 
+        logger.info(f"Using threshold: {thresh_pos:.3f} ({threshold2:.3f})")
+    diffmean = np.mean(diffmap_np)
+    sigma = diffmap_np.std()
+    peak_threshold = threshold*sigma+diffmean
+    
+    # threshold2 = thresh_pos*1.2
+    # Thresholds for positive and negative blobs
+    # pos_thresh = max_val * thresh_pos
+    pos_thresh = np.percentile(diffmap_np, 99.9) 
+    logger.info(f"Using pos_thresh: {pos_thresh:.3f}, in sigmas: {(pos_thresh-diffmean)/sigma:.3f}")
+
+    # Create masks for positive and negative blobs
+    pos_mask = diffmap_np >= pos_thresh
+
+    # Use 3D connectivity for labeling
+    structure = generate_binary_structure(3, 3)
+
+    # Label positive and negative blobs
+    pos_labeled, pos_num = label(pos_mask, structure=structure)
+    for label_id in range(1, pos_num + 1):
+        blob_peak = np.max(diffmap_np[pos_labeled == label_id])
+        if blob_peak < peak_threshold:
+            pos_labeled[pos_labeled == label_id] = 0  # remove blob below threshold
+
+    # Get sizes and sort order for positive blobs
+    pos_blob_sizes = np.bincount(pos_labeled.ravel())
+    pos_blob_sizes[0] = 0  # background
+
+    pos_blob_sizes[pos_blob_sizes < minimum_size] = 0  # filter out small blobs
+    pos_order = np.argsort(pos_blob_sizes)[::-1]  # largest first, skip 0
+
+    maximum_quantity = min(maximum_quantity, len(pos_order))
+    pos_order = pos_order[:maximum_quantity]
+
+    # Create masks for all positive blobs, ordered by size
+    pos_blob_masks = np.zeros_like(pos_labeled, dtype=int)
+
+    for new_idx, old_idx in enumerate(pos_order):
+        if old_idx != 0 and pos_blob_sizes[old_idx] > 0:
+            pos_blob_masks[pos_labeled == old_idx] = new_idx
+
+    return pos_blob_masks
+
+def find_most_positive_blobs_fixed_basis(
+    diffmap_np: np.ndarray,
+    *,
+    threshold: float,
+    minimum_size: int,
+    maximum_quantity: int,
+):
+    max_val = np.max(diffmap_np)
+    # add assertions allowing only for thresh_pos and thresh_neg
+    # or threshold, not both
+    if threshold is not None:
+        thresh_pos = threshold
+        threshold2 = threshold*np.max(diffmap_np)
+        thresh_pos = np.percentile(diffmap_np, 99.) 
+        if threshold2<thresh_pos:
+            threshold2 = thresh_pos 
+            logger.info(f"Using threshold: {thresh_pos:.3f} ({threshold2:.3f})")
+    # threshold2 = thresh_pos*1.2
+    # Thresholds for positive and negative blobs
+    # pos_thresh = max_val * thresh_pos
+    pos_thresh = np.percentile(diffmap_np, 99.8) 
+
+    logger.error(f"Using threshold for posmask: {pos_thresh/np.max(diffmap_np):.3f}")
+    # Create masks for positive and negative blobs
+    pos_mask = diffmap_np >= pos_thresh
+
+    # Use 3D connectivity for labeling
+    structure = generate_binary_structure(3, 3)
+
+    # Label positive and negative blobs
+    pos_labeled, pos_num = label(pos_mask, structure=structure)
+    for label_id in range(1, pos_num + 1):
+        blob_peak = np.max(diffmap_np[pos_labeled == label_id])
+        if blob_peak < threshold2:
+            pos_labeled[pos_labeled == label_id] = 0  # remove blob below threshold
+
+    # Get sizes and sort order for positive blobs
+    pos_blob_sizes = np.bincount(pos_labeled.ravel())
+    pos_blob_sizes[0] = 0  # background
+
+    pos_blob_sizes[pos_blob_sizes < minimum_size] = 0  # filter out small blobs
+    pos_order = np.argsort(pos_blob_sizes)[::-1]  # largest first, skip 0
+
+    maximum_quantity = min(maximum_quantity, len(pos_order))
+    pos_order = pos_order[:maximum_quantity]
+
+    # Create masks for all positive blobs, ordered by size
+    pos_blob_masks = np.zeros_like(pos_labeled, dtype=int)
+
+    for new_idx, old_idx in enumerate(pos_order):
+        if old_idx != 0 and pos_blob_sizes[old_idx] > 0:
+            pos_blob_masks[pos_labeled == old_idx] = new_idx
+
+    return pos_blob_masks
+
 
 def find_largest_blobs2(
     diffmap: rsmap.Map,
@@ -428,17 +627,23 @@ def find_largest_blobs2(
     maximum_quantity: int = np.inf,
     find_pos: bool = True,
     find_neg: bool = True,
+    blob_selection_func: callable = None,
 ):
+    blob_selection_func = (
+        find_most_positive_blobs_np
+        if blob_selection_func is None
+        else blob_selection_func
+    )
     diffmap_np = diffmap.to_3d_numpy_map(map_sampling=map_sampling)
     if find_pos:
-        pos_blob_mask = find_most_positive_blobs_np(
+        pos_blob_mask = blob_selection_func(
             diffmap_np,
             threshold=threshold,
             minimum_size=minimum_size,
             maximum_quantity=maximum_quantity,
         )
     if find_neg:
-        neg_blob_mask = find_most_positive_blobs_np(
+        neg_blob_mask = blob_selection_func(
             -diffmap_np,
             threshold=threshold,
             minimum_size=minimum_size,
