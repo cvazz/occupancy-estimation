@@ -194,6 +194,10 @@ def get_fits2(neg_sum, alpha_invs, n_largest, return_all=False):
     if intersection < 0:
         logger.error("Negative intersection found, this should not happen")
 
+    if np.max(np.abs(fit_lowest - fit_biggest)) < 0.1:
+        logger.warning(f"Fits are (close to) parallel: {intersection:.1f} )")
+        intersection = np.nan
+
     return fit_lowest, fit_biggest, intersection
 
 def many_negsum(
@@ -251,9 +255,6 @@ def many_negsum(
         intersection_points[jj] = intersect
 
         if np.max(np.abs(fit1 - fit2)) < 0.1:
-            # plt.figure()
-            # plt.plot(extrapolation_factors,fit1, color = colors[jj])
-            # plt.plot(extrapolation_factors,fit2,color = colors[jj])
             logger.warning(f"Fits are parallel (would have been {intersect:.2f}, {np.min(fit1):.1f}, {np.max(fit1):.1f}, {np.min(fit2):.1f},  {np.max(fit2):.1f} )") 
             intersection_points[jj] = np.nan
             # plt.show()
@@ -266,7 +267,6 @@ def process_many_negsum(intersection_points, weight, masks=None):
     finite_intersections = np.isfinite(intersection_points)
     masked_intersect = intersection_points[finite_intersections]
     masked_weight = weight[finite_intersections]
-    print("Beware of your choice")
     intersection_average = np.average(masked_intersect, weights=masked_weight)
     intersection_std = np.sqrt(np.cov(masked_intersect, aweights=masked_weight))
     intersection_average_inv = np.average(1 / masked_intersect, weights=masked_weight)
@@ -274,7 +274,7 @@ def process_many_negsum(intersection_points, weight, masks=None):
 
     logstart = "Intersection Average"
     log_msg = f"{logstart}: {intersection_average:.2f} ± {intersection_std:.2f}"
-    log_msg = f"Inverse: {intersection_average_inv:.2f} ± {intersection_std_inv:.2f}"
+    log_msg += f"Inverse: {intersection_average_inv:.2f} ± {intersection_std_inv:.2f}"
     logger.info(log_msg)
     if masks is not None:
         if len(masks) == len(intersection_points):
@@ -294,7 +294,8 @@ def process_many_negsum(intersection_points, weight, masks=None):
     if share_nan > 0.2:
         logger.error(f"Many NaN values in intersection points {share_nan:.2f} , consider adjusting your analysis.")
     share_nan_weight = 1 - np.sum(masked_weight) / np.sum(weight)
-    logger.warning(f"Many NaN values in intersection points (weighted) {share_nan_weight:.2f} out of 1")
+    if share_nan_weight:
+        logger.warning(f"Share of NaN values in intersection points (weighted) {share_nan_weight:.2f} out of 1")
 
     return output_dict
 
@@ -562,6 +563,99 @@ def find_most_positive_blobs_rmsd(
 
     return pos_blob_masks
 
+def calculate_all_pos_blobs(
+    diffmap_np: np.ndarray,
+    sigma: float
+):
+    
+    threshold = diffmap_np.std()*sigma-diffmap_np.mean()
+
+    # Create masks for positive and negative blobs
+    pos_mask = diffmap_np >= threshold
+
+    # Use 3D connectivity for labeling
+    structure = generate_binary_structure(3, 3)
+
+    # Label positive and negative blobs
+    pos_labeled, pos_num = label(pos_mask, structure=structure)
+    logger.warning(f"Used threshold for posmask: {threshold/np.max(diffmap_np):.3f}, found {pos_num} blobs")
+    return pos_labeled
+
+
+def filter_pos_blobs_rmsd(
+    diffmap_np: np.ndarray,
+    pos_labeled: np.ndarray,
+    *,
+    threshold: float,
+    maximum_quantity: int,
+    minimum_size: int = 10,
+):
+    threshold2 = threshold*diffmap_np.std()-np.mean(diffmap_np)
+    for label_id in range(1, np.max(pos_labeled) + 1):
+        blob_peak = np.max(diffmap_np[pos_labeled == label_id])
+        if blob_peak < threshold2:
+            pos_labeled[pos_labeled == label_id] = 0  # remove blob below threshold
+
+    # Get sizes and sort order for positive blobs
+    pos_blob_sizes = np.bincount(pos_labeled.ravel())
+    pos_blob_sizes[0] = 0  # background
+    # from matplotlib import pyplot as plt
+    # bins = np.arange(0.1, np.max(pos_blob_sizes)+1, 1)
+    # plt.figure()
+    # plt.hist(pos_blob_sizes, bins=bins)
+    # plt.show()
+
+    pos_blob_sizes[pos_blob_sizes < minimum_size] = 0  # filter out small blobs
+    pos_order = np.argsort(pos_blob_sizes)[::-1]  # largest first, skip 0
+
+
+    maximum_quantity = min(maximum_quantity, len(pos_order))
+    pos_order = pos_order[:maximum_quantity]
+
+    # Create masks for all positive blobs, ordered by size
+    pos_blobs = np.zeros_like(pos_labeled, dtype=int)
+
+    pos_blob_mask_list = []
+    for new_idx, old_idx in enumerate(pos_order):
+        if old_idx != 0 and pos_blob_sizes[old_idx] > 0:
+            pos_blobs[pos_labeled == old_idx] = new_idx
+            pos_blob_mask_list.append(pos_labeled == old_idx)
+    return pos_blobs, pos_blob_mask_list
+
+def filter_pos_blobs(
+    diffmap_np: np.ndarray,
+    pos_labeled: np.ndarray,
+    *,
+    threshold: float,
+    maximum_quantity: int,
+    minimum_size: int = 10,
+):
+    threshold2 = threshold*np.max(diffmap_np)
+    for label_id in range(1, np.max(pos_labeled) + 1):
+        blob_peak = np.max(diffmap_np[pos_labeled == label_id])
+        if blob_peak < threshold2:
+            pos_labeled[pos_labeled == label_id] = 0  # remove blob below threshold
+
+    # Get sizes and sort order for positive blobs
+    pos_blob_sizes = np.bincount(pos_labeled.ravel())
+    pos_blob_sizes[0] = 0  # background
+
+    pos_blob_sizes[pos_blob_sizes < minimum_size] = 0  # filter out small blobs
+    pos_order = np.argsort(pos_blob_sizes)[::-1]  # largest first, skip 0
+
+    maximum_quantity = min(maximum_quantity, len(pos_order))
+    pos_order = pos_order[:maximum_quantity]
+
+    # Create masks for all positive blobs, ordered by size
+    pos_blobs = np.zeros_like(pos_labeled, dtype=int)
+
+    pos_blob_mask_list = []
+    for new_idx, old_idx in enumerate(pos_order):
+        if old_idx != 0 and pos_blob_sizes[old_idx] > 0:
+            pos_blobs[pos_labeled == old_idx] = new_idx
+            pos_blob_mask_list.append(pos_labeled == old_idx)
+    return pos_blobs, pos_blob_mask_list
+
 def find_most_positive_blobs_fixed_basis(
     diffmap_np: np.ndarray,
     *,
@@ -623,7 +717,7 @@ def find_largest_blobs2(
     map_sampling: float,
     *,
     threshold: float = 0.5,
-    minimum_size: int = 3,
+    minimum_size: int = 10,
     maximum_quantity: int = np.inf,
     find_pos: bool = True,
     find_neg: bool = True,
@@ -662,7 +756,57 @@ def find_largest_blobs2(
 ################################################################################
 ################################################################################
 ################################################################################
+import pandas as pd
+def realspace_maximum_scaling(
+    reference_map: rsmap.Map,
+    map_to_scale: rsmap.Map,
+    map_sampling: float = 3.0,
+):
+    ref_map = reference_map.to_3d_numpy_map(map_sampling=map_sampling)
+    scale_map = map_to_scale.to_3d_numpy_map(map_sampling=map_sampling)
+    shares = [0.01, 0.005, 0.001, 0.0005]
+    pos_scales, neg_scales = [], []
+    for share in shares:
+        k = int(share * ref_map.size)
+        # Get k largest values
+        largest_indices = np.argpartition(ref_map.flatten(), -k)[-k:]
+        largest_values_ref = ref_map.flatten()[largest_indices]
+        largest_indices = np.argpartition(scale_map.flatten(), -k)[-k:]
+        largest_values_scale = scale_map.flatten()[largest_indices]
 
+        # Get k smallest values
+        smallest_indices = np.argpartition(ref_map.flatten(), k)[:k]
+        smallest_values_ref = ref_map.flatten()[smallest_indices]
+        smallest_indices = np.argpartition(scale_map.flatten(), k)[:k]
+        smallest_values_scale = scale_map.flatten()[smallest_indices]
+        # Compute scaling factors using percentiles
+        pos_scale = np.mean(largest_values_ref) / np.mean(largest_values_scale)
+        neg_scale = np.min(smallest_values_ref) / np.min(smallest_values_scale)
+        pos_scales.append(pos_scale)
+        neg_scales.append(neg_scale)
+    if np.std(neg_scales) / np.mean(neg_scales) > 0.1:
+        logger.warning(
+            f"High variation in negative scaling factors: {neg_scales}, using last."
+        )
+    return pos_scale, neg_scale
+
+
+def rescaling_diffmap(diffmap_to_scale: rsmap.Map, diffmap_reference: rsmap.Map):
+    pos_scale, neg_scale = realspace_maximum_scaling(
+        reference_map=diffmap_reference,
+        map_to_scale=diffmap_to_scale,
+    )
+    scaling_factor =  neg_scale * 2 # scaling to vanilla map
+    finite_amps = np.isfinite(diffmap_to_scale.amplitudes)
+    diffmap_to_scale.loc[
+        finite_amps, diffmap_to_scale.amplitude_column_name
+    ] *= scaling_factor
+    if diffmap_to_scale.has_uncertainties:
+        diffmap_to_scale.loc[
+            finite_amps, diffmap_to_scale.uncertainties_column_name
+        ] *= scaling_factor
+    logger.info(f"Rescaled map by factor {scaling_factor}")
+    return diffmap_to_scale
 
 def adding_maps(map1: rsmap.Map, map2: rsmap.Map, *, factor1=1, factor2=1):
     common_indices = map1.index.intersection(map2.index)
@@ -671,13 +815,50 @@ def adding_maps(map1: rsmap.Map, map2: rsmap.Map, *, factor1=1, factor2=1):
     added_structure_factors = (
         factor1 * structure_factors1 + factor2 * structure_factors2
     )
-    return rsmap.Map.from_structurefactor(
+
+    sum_of_map  = rsmap.Map.from_structurefactor(
         added_structure_factors,
         index=common_indices,
         cell=map1.cell,
         spacegroup=map1.spacegroup,
     )
 
+    if  map1.has_uncertainties and map2.has_uncertainties:
+        sigmaF = np.sqrt(
+          (factor1 * map1.uncertainties[common_indices]) ** 2
+        + (factor2 * map2.uncertainties[common_indices]) ** 2
+        )
+        sum_of_map.set_uncertainties(pd.Series(sigmaF, index=common_indices))
+    return sum_of_map
+
+def saving_xtrapolated_map(
+        diffmap:rsmap.Map, 
+        *,
+        map_dark:rsmap.Map, 
+        xtr_factor:float,
+        reference_diffmap:rsmap.Map = None,
+        seed_dataset:rs.DataSet = None,
+        save_diffmap:bool = False,
+        filename : str = "xtr_map"
+        ):
+    diffmap =rescaling_diffmap(diffmap.copy(), reference_diffmap) 
+    xtr_map = adding_maps(map_dark, diffmap, factor2=xtr_factor)
+    if seed_dataset is not None:
+        implant = rs.DataSet(seed_dataset.copy())
+        implant[["F", "SIGF", "PHIC"]] = xtr_map[["F", "SIGF", "PHI"]]
+        necessary_cols = ["H", "K", "L", "F", "SIGF", "PHIC", "FreeR_flag"]
+        implant = implant.drop(columns=[col for col in implant.columns if col not in necessary_cols])
+    mask = np.logical_or((~implant["F"].isna() & implant["SIGF"].isna()), (implant["F"].isna() & ~implant["SIGF"].isna()))
+    non_matching_indices = np.sum(np.array(mask))
+    if non_matching_indices > 0:
+        print(non_matching_indices)
+        logger.warning(f"Number of rows with not shared NaNs in F and SIGF: {non_matching_indices}")
+    implant.loc[mask, ["F", "PHIC"]] = np.nan
+    implant.write_mtz(f"{filename}_{xtr_factor}.mtz")
+    if save_diffmap:
+        diffmap.write_mtz(f"diffmap_kweighted.mtz")
+        return xtr_map, diffmap
+    return xtr_map
 
 def make_k_space_xtr(
     map_dark,
@@ -687,7 +868,6 @@ def make_k_space_xtr(
 
     map_xtrs = []
     for xtr_factor in extrapolation_factors:
-
         map_xtr = adding_maps(diffmap, map_dark, factor1=xtr_factor)
         map_xtrs.append(map_xtr)
     return map_xtrs
