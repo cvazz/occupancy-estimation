@@ -10,6 +10,8 @@ import matplotlib.colors as mcolors
 from scipy import stats
 from scipy.signal import correlate
 
+from logger import setup_logger
+
 # import multiprocessing as mp
 import logging
 
@@ -84,64 +86,6 @@ def title_and_saving(filename_dict, plot_title, plot_name, fig, ax=None):
         plt.close(fig)
 
 
-class CustomFormatter(logging.Formatter):
-
-    grey = "\x1b[38;20m"
-    yellow = "\x1b[33;20m"
-    red = "\x1b[31;20m"
-    bold_red = "\x1b[31;1m"
-    reset = "\x1b[0m"
-    # datefmt = "%Y-%m-%d %H:%M:%S"
-    datefmt = "%H:%M:%S"
-    format = "%(levelname)s %(asctime)s - %(message)s (%(filename)s:%(lineno)d)"
-    format = (
-        "%(asctime)s: %(name)s: %(levelname)s: %(message)s (%(filename)s:%(lineno)d)"
-    )
-    format = (
-        "%(asctime)s: %(name)s: %(levelname)s: %(message)s (%(filename)s:%(lineno)d)"
-    )
-
-    FORMATS = {
-        logging.DEBUG: grey + format + reset,
-        logging.INFO: grey + format + reset,
-        logging.WARNING: yellow + format + reset,
-        logging.ERROR: red + format + reset,
-        logging.CRITICAL: bold_red + format + reset,
-    }
-
-    def format(self, record):
-        # format = "%(asctime)s: %(levelname)s - %(message)s (%(filename)s:%(lineno)d)"
-        # datefmt = "%H:%M:%S"
-        log_fmt = self.FORMATS.get(record.levelno)
-        # Indent line breaks in the message to align with end of levelname and time
-        levelname_len = len(
-            record.levelname
-        )  # + len(record.asctime) + 3  # levelname + space + time + ' - '
-        # asctime will be formatted as time only (HH:MM:SS)
-        # record.asctime = self.formatTime(record, "%H:%M:%S")
-        indent = " " * (levelname_len + 12 + 12 + 2)  # levelname + space + time + ' - '
-        if record.msg and isinstance(record.msg, str):
-            record.msg = record.msg.replace("\n", "\n" + indent)
-        formatter = logging.Formatter(log_fmt)
-        return formatter.format(record)
-
-
-def setup_logger(log_level=logging.DEBUG):
-    """
-    Set up the logger with a custom formatter.
-    """
-    root_logger = logging.getLogger()
-    root_logger.setLevel(logging.INFO)
-    ch = logging.StreamHandler()
-    ch.setLevel(log_level)
-    ch.setFormatter(CustomFormatter())
-    root_logger.handlers = []  # Remove any default handlers
-    root_logger.addHandler(ch)
-    logging.getLogger("generate_objects").setLevel(logging.WARNING)
-
-    logger = logging.getLogger(__name__)
-    return logger
-
 
 ################################################################################
 ##############################  Processing  ###################################
@@ -200,14 +144,14 @@ def calculate_within_sigma_range(
             -diffmap_np,
             sigma = sigma
         )
-    if False:
-        threshs = [thresholds_rmsd[5]]
+    if len(thresholds_rmsd)<2:
+        threshs = [thresholds_rmsd[0]]
         fig, axs = plt.subplots(len(threshs), figsize=(8, 4*len(threshs)))
         axs = [axs]
     else:
         threshs = thresholds_rmsd[::3]
         fig, axs = plt.subplots(len(threshs), figsize=(8, 4*len(threshs)), tight_layout=True)
-        axs = axs.flat
+        axs = axs.flat if len(threshs)>1 else [axs]
     best_guesses, uncertainty = [], []
     for thresh,ax in zip(threshs, axs):
         neg_blobs, neg_blobs_masks = filter_pos_blobs_rmsd(
@@ -492,6 +436,59 @@ def plot_one_nse(extrapolation_factors, negsum, ax=None):
     ax.set_ylabel("Normalized Negative Sum")
     ax.set_xlabel("Extrapolation Factor")
 
+from scipy.special import erf
+from scipy.optimize import curve_fit
+from scipy.special import erfcx
+
+def upper_truncated_normal_mean(mu, sigma, b, *, beta_cut=-8.0, use_first_correction=False):
+    """
+    Stable mean of N(mu, sigma^2) truncated above at b (i.e., X <= b).
+    For very negative beta, optionally approximate by the constant limit b
+    (or b + sigma/beta if use_first_correction=True) to yield flat NSE curves.
+    """
+    beta = (b - mu) / sigma
+
+    # mask for very negative beta where you want constant behavior
+    mask = beta <= beta_cut
+    out = np.empty_like(beta, dtype=float)
+
+
+    # 1) asymptotic constant (or first-correction) branch
+    if np.any(mask):
+        if use_first_correction:
+            out[mask] = b + sigma[mask] / beta[mask]  # ≈ b for large |beta|
+        else:
+            out[mask] = b  # exact limit as beta -> -∞
+
+    # 2) stable exact evaluation elsewhere using erfcx for beta<0
+    mask_pos = ~mask
+    if np.any(mask_pos):
+        bet = beta[mask_pos]
+        # piecewise-stable Mills ratio
+        lam = np.empty_like(bet)
+        neg = bet < 0
+        if np.any(neg):
+            lam[neg] = np.sqrt(2/np.pi) / erfcx(-bet[neg]/np.sqrt(2))
+        if np.any(~neg):
+            # safe when bet >= 0
+            phi = (1.0/np.sqrt(2*np.pi)) * np.exp(-0.5*bet[~neg]**2)
+            Phi = 0.5 * (1.0 + erf(bet[~neg]/np.sqrt(2)))
+            lam[~neg] = phi / Phi
+        out[mask_pos] = mu[mask_pos] - sigma[mask_pos] * lam
+
+    return out
+
+
+
+def nse_binary_model(alpha, n, m, alpha_tr, sigma):
+    b = 0.0
+    sigma_0 = sigma * np.sqrt(1 + np.square(alpha))
+    xi = upper_truncated_normal_mean(alpha_tr - alpha, sigma_0, b, use_first_correction=True)
+    res = (n/2)- m * xi
+    return res
+
+# def run_model()
+
 
 from meteorize import get_fits2
 def plot_single_nse_model(
@@ -501,57 +498,6 @@ def plot_single_nse_model(
     filename_dict=None,
     plot_name=None,
 ):
-    from scipy.special import erf
-    from scipy.optimize import curve_fit
-    from scipy.special import erfcx
-
-    def upper_truncated_normal_mean(mu, sigma, b, *, beta_cut=-8.0, use_first_correction=False):
-        """
-        Stable mean of N(mu, sigma^2) truncated above at b (i.e., X <= b).
-        For very negative beta, optionally approximate by the constant limit b
-        (or b + sigma/beta if use_first_correction=True) to yield flat NSE curves.
-        """
-        beta = (b - mu) / sigma
-
-        # mask for very negative beta where you want constant behavior
-        mask = beta <= beta_cut
-        out = np.empty_like(beta, dtype=float)
-
-
-        # 1) asymptotic constant (or first-correction) branch
-        if np.any(mask):
-            if use_first_correction:
-                out[mask] = b + sigma[mask] / beta[mask]  # ≈ b for large |beta|
-            else:
-                out[mask] = b  # exact limit as beta -> -∞
-
-        # 2) stable exact evaluation elsewhere using erfcx for beta<0
-        mask_pos = ~mask
-        if np.any(mask_pos):
-            bet = beta[mask_pos]
-            # piecewise-stable Mills ratio
-            lam = np.empty_like(bet)
-            neg = bet < 0
-            if np.any(neg):
-                lam[neg] = np.sqrt(2/np.pi) / erfcx(-bet[neg]/np.sqrt(2))
-            if np.any(~neg):
-                # safe when bet >= 0
-                phi = (1.0/np.sqrt(2*np.pi)) * np.exp(-0.5*bet[~neg]**2)
-                Phi = 0.5 * (1.0 + erf(bet[~neg]/np.sqrt(2)))
-                lam[~neg] = phi / Phi
-            out[mask_pos] = mu[mask_pos] - sigma[mask_pos] * lam
-
-        return out
-
-
-
-    def nse_binary_model(alpha, n, m, alpha_tr, sigma):
-        b = 0.0
-        sigma_0 = sigma * np.sqrt(1 + np.square(alpha))
-        xi = upper_truncated_normal_mean(alpha_tr - alpha, sigma_0, b, use_first_correction=True)
-        res = (n/2) - m * xi
-        return res
-
 
     # Create a ScalarMappable for the colorbar
     plt.close("all")
@@ -560,6 +506,8 @@ def plot_single_nse_model(
         figsize=(8, 3*len(thresholds)),
         tight_layout=True
     )
+    if len(thresholds)<2:
+        axs = [axs]
     intersects = []
     uncertainty = []
     for ii, (thresh, negsum) in enumerate(zip(thresholds, negsums)):
@@ -571,7 +519,7 @@ def plot_single_nse_model(
                 extrapolation_factors,
                 -negsum,
                 p0=[10, 10, 0.1, 1],
-                bounds=([0, 0, 0, 0], [1e6, 1e6, 1e2, 1e3]),
+                bounds=([0, 0, 0, 0,], [1e6, 1e6, 1e2, 1e3]),
             )
             ax.plot(extrapolation_factors, nse_binary_model(extrapolation_factors, *popt), '-', label='fit')
             axtitle = f'Threshold: {thresh:.2f}, n={popt[0]:.1f}, m={popt[1]:.1f}, alpha_tr={popt[2]:.2f}, sigma={popt[3]:.2f}'
@@ -596,12 +544,12 @@ def plot_single_nse_model(
     ax2.plot(thresholds, uncertainty, 'o-', color='orange', label='sigma')
     ax.set_xlabel('Mask Threshold')
     ax.set_ylabel('Optimal Extrapolation Factor')
-    ax2.twinx().set_ylabel('Uncertainty')    
+    ax2.set_ylabel('Uncertainty')    
     ax.legend(loc='upper left')
     ax2.legend(loc='upper right')
     title = "Single Negative Sums Model Summary"
     title_and_saving(filename_dict, title, plot_name+"_summary", fig, ax=axs[0])
-    return intersects
+    return intersects, uncertainty
 
 
 
@@ -691,31 +639,36 @@ def plot_many_negsum_best_violin(best_guesses_dict, filename_dict=None, plot_nam
     width_factor = 0.5  # You can adjust this factor for more/less overlap
     violin_width = min_spacing * width_factor
 
-    ax.violinplot(
-        [ints[np.isfinite(ints)] for ints in intersections],
-        positions=positions,
-        widths=violin_width,
-        showmeans=False,
-        showmedians=True,
-        showextrema=True,
-    )
+    try: 
+        ax.violinplot(
+            [ints[np.isfinite(ints)] for ints in intersections ],
+            positions=positions,
+            widths=violin_width,
+            showmeans=False,
+            showmedians=True,
+            showextrema=True,
+        )
     #     showmeans=False,
     #     showmedians=True,
     #     showextrema=True
     # )
     # ax.axhline(21, linewidth=0.5, color="k", linestyle="--")
-    ax.set_ylabel("Extrapolation Factor")
-    ax.set_ylim(0, None)
-    ax.grid(True)
-    ax = axs[1]
-    ax.violinplot(
-        [(1 / ints)[np.isfinite(1 / ints)] for ints in intersections],
-        positions=thresholds_many,
-        widths=violin_width,
-        showmeans=False,
-        showmedians=True,
-        showextrema=True,
-    )
+        ax.set_ylabel("Extrapolation Factor")
+        ax.set_ylim(0, None)
+        ax.grid(True)
+        ax = axs[1]
+        ax.violinplot(
+            [(1 / ints)[np.isfinite(1 / ints)] for ints in intersections],
+            positions=thresholds_many,
+            widths=violin_width,
+            showmeans=False,
+            showmedians=True,
+            showextrema=True,
+        )
+        save_plot = True
+    except ValueError:
+        logger.warning("No valid intersections found for violin plot.")
+        save_plot = False
     ax.set_ylabel('"Occupancy"')
     # ax.set_xlabel("Mask Threshold (Percentage of Maximum)")
     ax.set_xlabel("Mask Threshold (Peak Sigma in Blob)")
@@ -739,7 +692,8 @@ def plot_many_negsum_best_violin(best_guesses_dict, filename_dict=None, plot_nam
     # nan_warning = mask_weights[np.isnan(intersection_points)].sum() / mask_weights.sum() > 0.2
     # if nan_warning:
     #     title += " \n(Warning: Many NaN Intersections)"
-    title_and_saving(filename_dict, title, plot_name, fig, axs[0])
+    if save_plot:
+        title_and_saving(filename_dict, title, plot_name, fig, axs[0])
 
 
 def plot_many_negsum_best_guesses(
@@ -886,7 +840,7 @@ def plot_many_negsum_all_lines(
         mask_weights[np.isnan(intersection_points)].sum() / mask_weights.sum() > 0.2
     )
     if nan_warning:
-        raise Warning(
+        logger.error(
             f"More than 20% of the weights are not valid for threshold {thresh:.2f}. "
         )
 
@@ -1217,6 +1171,7 @@ def plot_true_correlations(
 def plot_overall_comparison(comparison_device, filename_dict):
     fig, ax = plt.subplots(figsize=(8, 6))
     for key, value_device in comparison_device.items():
+        print(key)
         if key == "cross_correlation_coefficients":
             continue
         # if "uncertainty" in value_device:
@@ -1324,16 +1279,38 @@ def load_photolyase_paths() -> list[dict]:
         logger.info(f"Loaded {info_container['tname']} with {info_container['fname']}")
     return info_containers
 
+def load_cistrans_paths() -> list[dict]:
+    logger.info("Loading CisTrans paths")
+    dataloc = homepath + "../synthetic_cistrans/"
+    pdbloc_dark = dataloc + "trans.pdb"
+    pdbloc_light = dataloc + "100ps.pdb"
+    info_container = {
+        "pdbloc_dark": pdbloc_dark,
+        "pdbloc_light": pdbloc_light,
+        "tname": "CisTrans",
+        "fname": "cistrans",
+        "fshort": "CT",
+        "datatype": "cistrans",
+        "hs_limit": 1.8,
+        "map_sampling": 3,
+        "mid_xtr_factor": 4,
+        "max_xtr_factor": 14,
+
+    }
+    return [info_container]
+
+
+
 
 def load_mpro_paths() -> list[dict]:
     logger.info("Loading MPro paths")
     homepath = load_homepath()
     folderloc = homepath + "../data/meteor_data/"
     dataloc_dark = folderloc + "k.mtz"
-    dataloc_light = folderloc + "on.mtz"
+    pdbloc_light = folderloc + "on.mtz"
     folderloc = homepath + "../meteor/test/data/"
     dataloc_dark = folderloc + "scaled-test-data.mtz"
-    dataloc_light = folderloc + "scaled-test-data.mtz"
+    pdbloc_light = folderloc + "scaled-test-data.mtz"
     pdbloc_light = folderloc + "8a6g.pdb"
     pdbloc_dark = folderloc + "8a6g-chromophore-removed.pdb"
     fname = "mpro"
@@ -1341,7 +1318,7 @@ def load_mpro_paths() -> list[dict]:
     info_container = {
         "dataloc_dark": dataloc_dark,
         "pdbloc_dark": pdbloc_dark,
-        "dataloc_light": dataloc_light,
+        "dataloc_light": pdbloc_light,
         "pdbloc": pdbloc_light,
         "hs_limit": 2.4,
         "map_sampling": 3,
@@ -1356,11 +1333,11 @@ def load_mpro_paths() -> list[dict]:
 def load_maxiv_paths() -> list[dict]:
     dataloc = homepath + "../data/MAXIV_ECH_new/"
     dataloc_dark = dataloc + "initial/ech-full_dark_dimple.mtz"
-    dataloc_light = dataloc + "initial/ech-light_dimple.mtz"
+    pdbloc_light = dataloc + "initial/ech-light_dimple.mtz"
     info_container = {
         "dataloc_dark": dataloc_dark,
         "pdbloc_dark": None,
-        "dataloc_light": dataloc_light,
+        "dataloc_light": pdbloc_light,
         "tname": "MAX IV OCP data",
         "fname": "maxiv",
         "fshort": "M4",
@@ -1377,12 +1354,12 @@ def load_maxiv_paths() -> list[dict]:
 def load_ocp_paths() -> list[dict]:
     dataloc = homepath + "../data/MAXIV_ECH_new/"
     dataloc_dark = dataloc + "updated/ech-full_dark_dimple.mtz"
-    dataloc_light = dataloc + "updated/ech-laser_dimple.mtz"
+    pdbloc_light = dataloc + "updated/ech-laser_dimple.mtz"
     pdbloc_dark = dataloc + "models/ECH_MAXIV_dark_model.pdb"
     info_container = {
         "dataloc_dark": dataloc_dark,
         "pdbloc_dark":  pdbloc_dark,
-        "dataloc_light": dataloc_light,
+        "dataloc_light": pdbloc_light,
         "tname": "MAX IV OCP data 2",
         "fname": "OCP",
         "fshort": "OCP",
@@ -1419,6 +1396,7 @@ def load_doeke_paths() -> list[dict]:
         "fname": fname,
         "tname": tname,
         "fshort": fname,
+        "dark_phases": True,
         "datatype": fname,
     }
     return [info_container]
@@ -1616,7 +1594,7 @@ def get_mpro_maps(ds_dark, ds_light, info_container):
 from meteor.scale import scale_maps
 
 
-def get_maxiv_maps(ds_dark, ds_light):
+def get_maxiv_maps(ds_dark, ds_light, dark_phases=True):
     dark_columns = {
         "amplitude_column": "F",
         "uncertainty_column": "SIGF",
@@ -1625,9 +1603,10 @@ def get_maxiv_maps(ds_dark, ds_light):
     light_columns = {
         "amplitude_column": "F",
         "uncertainty_column": "SIGF",
-        "phase_column": "PHI_dark",
+        "phase_column": "PHIC",
     }
-    ds_light[light_columns["phase_column"]] = ds_dark[dark_columns["phase_column"]]
+    if dark_phases:
+        ds_light[light_columns["phase_column"]] = ds_dark[dark_columns["phase_column"]]
     map_dark = rsmap.Map(ds_dark, **dark_columns)
     map_light_unscaled = rsmap.Map(ds_light, **light_columns)
     from meteor.scale import scale_maps
@@ -1698,22 +1677,23 @@ def get_doeke_maps(ds_dark, ds_light):
     return map_dark, map_light
 
 
-def get_doeke_maps2(ds_dark, ds_light):
+def get_doeke_maps(ds_dark, ds_light, dark_phases=True):
+    logger.info("Calculating Doeke maps V2")
     dark_columns = dict(
-        amplitude_column="dark2",
-        uncertainty_column="SIGF_dark2",
+        amplitude_column="dark",
+        uncertainty_column="SIGF_dark",
         phase_column="PHI_maps",
     )
 
-    dark_columns = dict(
-        amplitude_column="F",
-        uncertainty_column="SigF",
-        phase_column="PHI_maps",
-    )
+    # dark_columns = dict(
+    #     amplitude_column="F",
+    #     uncertainty_column="SigF",
+    #     phase_column="PHI_maps",
+    # )
     light_columns = dict(
         amplitude_column="F",
         uncertainty_column="SigF",
-        phase_column=dark_columns["phase_column"],
+        phase_column="PHI_maps",
     )
     ds_dark2 = {
         "I": ds_dark["dark"] ** 2,
@@ -1723,31 +1703,38 @@ def get_doeke_maps2(ds_dark, ds_light):
     ds_dark2 = rs.DataSet(ds_dark2, spacegroup=ds_dark.spacegroup, cell=ds_dark.cell)
     ds_dark2 = rs.algorithms.merge(ds_dark2)
     print(ds_dark2.columns)
+    logger.info(f"Merged maps: {ds_dark2.merged}, {ds_dark.merged}, {ds_light.merged}")
     # add phase from dark to light
     ds_dark2["F"] = np.sqrt(ds_dark2["IMEAN"])
     ds_dark2["SigF"] = ds_dark2["SIGIMEAN"] / (2 * ds_dark2["F"])
     ds_dark2["PHI_maps"] = ds_dark["PHI_maps"]
+    ds_dark.merged = True
     # ds_light = rs.algorithms.merge(ds_light)
-    ds_light[light_columns["phase_column"]] = ds_dark2[dark_columns["phase_column"]]
-    unscaled_dark = rsmap.Map(ds_dark2, **dark_columns)
+    if dark_phases:
+        ds_light[light_columns["phase_column"]] = ds_dark2[dark_columns["phase_column"]]
+    unscaled_dark = rsmap.Map(ds_dark, **dark_columns)
     unscaled_light = rsmap.Map(ds_light, **light_columns)
     scaled_light = scale_maps(reference_map=unscaled_dark, map_to_scale=unscaled_light)
     map_dark = unscaled_dark
     map_light = scaled_light
     logger.info(f"Merged maps: {map_dark.merged}, {map_light.merged}")
-
+    # slice_3d(map_dark.to_3d_numpy_map(map_sampling=3),) 
+    # plt.show()
+    # slice_3d(map_light.to_3d_numpy_map(map_sampling=3))
+    # plt.show()
     return map_dark, map_light
 
 
 def calculate_scaled_maps(ds_dark, ds_light, info_container):
+    dark_phases = info_container["dark_phases"] 
     if info_container["datatype"] == "photolyase":
-        map_dark, map_light = get_photolyase_maps(ds_dark, ds_light)
+        map_dark, map_light = get_photolyase_maps(ds_dark, ds_light, dark_phases)
     elif info_container["datatype"] == "mpro":
         map_dark, map_light = get_mpro_maps(ds_dark, ds_light, info_container)
     elif info_container["datatype"] == "doeke":
-        map_dark, map_light = get_doeke_maps(ds_dark, ds_light)
+        map_dark, map_light = get_doeke_maps(ds_dark, ds_light, dark_phases)
     elif info_container["datatype"] in ["maxiv", "OCP"]:
-        map_dark, map_light = get_maxiv_maps(ds_dark, ds_light)
+        map_dark, map_light = get_maxiv_maps(ds_dark, ds_light, dark_phases)
     else:
         raise ValueError(
             f"Unknown datatype {info_container['datatype']}. Please implement map calculation."
@@ -1848,21 +1835,62 @@ def redo_plot(filename_dict, plot_name):
         logger.warning(warn_str)
     return do_run_analysis
 
+def manipulate_cistrans(info_container):
+    # Perform manipulation on the cistrans data
+    hs_limit = info_container["hs_limit"]
+    map_sampling = info_container["map_sampling"]
+    struc_dark = gemmi.read_structure(info_container["pdbloc_dark"])
+    struc_light = gemmi.read_structure(info_container["pdbloc_light"])
+
+    map_dark = meteor.sfcalc.gemmi_structure_to_calculated_map(
+        struc_dark, high_resolution_limit=hs_limit
+    )
+    map_light = meteor.sfcalc.gemmi_structure_to_calculated_map(
+        struc_light, high_resolution_limit=hs_limit
+    )
+    noise_level = 0.3
+    noise = np.random.normal(loc=1.0, scale=noise_level, size=len(map_dark["F"]))
+    map_dark["F"] = map_dark["F"] * noise
+    noise = np.random.normal(loc=1.0, scale=noise_level, size=len(map_light["F"]))
+    map_light["F"] = map_light["F"] * noise
+
+    zero_F = -map_dark.cell.volume*map_dark.to_3d_numpy_map(map_sampling=map_sampling).min()*4
+    zero_col = {"F":zero_F, "PHI":0, }
+
+
+    map_dark.loc[(0,0,0)] = zero_col
+    map_light.loc[(0,0,0)] = zero_col
+    map_dark.sort_index(inplace=True)
+    map_light.sort_index(inplace=True)
+    map_light.to_ccp4_map(map_sampling=map_sampling)
+
+
+    map_light.phases = map_dark.phases
+    ds_one = map_dark.F*0+1e-5
+    map_dark.set_uncertainties(ds_one.copy())
+    map_light.set_uncertainties(ds_one.copy())
+    return map_dark, map_light
 
 def calculate_objects(info_container, evaluation_path, return_light=False):
-    dataloc_dark = info_container["dataloc_dark"]
-    dataloc_light = info_container["dataloc_light"]
-
     hs_limit = info_container["hs_limit"]
     map_sampling = info_container["map_sampling"]
 
-    ds_light = rs.read_mtz(dataloc_light)
-    ds_dark = rs.read_mtz(dataloc_dark)
+    if "dataloc_dark" not in info_container:
+        logger.warning("Treating as Simulation file")
+        map_dark, map_light = manipulate_cistrans(info_container)
+    else: 
 
-    ds_dark = cut_resolution(ds_dark, high_resolution_limit=hs_limit)
-    ds_light = cut_resolution(ds_light, high_resolution_limit=hs_limit)
+    
+        dataloc_dark = info_container["dataloc_dark"]
+        dataloc_light = info_container["dataloc_light"]
 
-    map_dark, map_light = calculate_scaled_maps(ds_dark, ds_light, info_container)
+        ds_light = rs.read_mtz(dataloc_light)
+        ds_dark = rs.read_mtz(dataloc_dark)
+
+        ds_dark = cut_resolution(ds_dark, high_resolution_limit=hs_limit)
+        ds_light = cut_resolution(ds_light, high_resolution_limit=hs_limit)
+
+        map_dark, map_light = calculate_scaled_maps(ds_dark, ds_light, info_container)
 
     evaluation_path_basis = evaluation_path + info_container["fname"] + "/"
 
@@ -1885,7 +1913,7 @@ def run_sigma_test(value_device, filename_dict, plot_name):
     logger.info("Running Many NegSum - Best Guess")
     map_dark = value_device["map_dark"]   
     diffmap = value_device["diffmap"]
-    extrapolation_factors = np.arange(1,20,0.5)
+    extrapolation_factors = np.arange(1,12,0.25)
     map_xtrs = make_k_space_xtr(map_dark, diffmap, extrapolation_factors)
     mns_best_guesses_dict = calculate_within_sigma_range(
         diffmap,
@@ -1973,7 +2001,7 @@ def run_single_negsum_model(value_device, filename_dict, plot_name):
     # plot_single_nse_overview is a function that plots the results of the single negsum
     # and returns the intersection points
 
-    intersects = plot_single_nse_model(
+    intersects, uncertainty = plot_single_nse_model(
         value_device["extrapolation_factors"],
         negsums,
         thresholds,
@@ -1981,8 +2009,9 @@ def run_single_negsum_model(value_device, filename_dict, plot_name):
         plot_name=plot_name,
     )
     return {
-        "thresholds": value_device["thresholds_rmsd"],
+        "thresholds": thresholds,
         "best_guess": intersects,
+        "uncertainty": uncertainty,
     }
 
 def run_single_negsum_overview(value_device, filename_dict, plot_name):
@@ -2104,7 +2133,7 @@ def make_extrapolation_factors(info_container):
     middle_extrapolation_factor = info_container.get("mid_xtr_factor", xtr_default_mid)
     maximum_extrapolation_factor = info_container.get("max_xtr_factor", xtr_default_max)
     # minmax = maximum_extrapolation_factor * 0.8
-    x1 = np.linspace(minimum_extrapolation_factor, middle_extrapolation_factor, 8)
+    x1 = np.linspace(minimum_extrapolation_factor, middle_extrapolation_factor, 12)
     x3 = np.linspace(middle_extrapolation_factor, maximum_extrapolation_factor, 12)
     extrapolation_factors = np.concatenate((x1, x3))
     info_msg = f"Created extrapolation factors ranging from {minimum_extrapolation_factor} to {maximum_extrapolation_factor} with mid at {middle_extrapolation_factor}"
@@ -2170,7 +2199,7 @@ def run_plots(
     pdbloc_light = info_container.get("pdbloc_light", None)
 
     extrapolation_factors = make_extrapolation_factors(info_container)
-    # extrapolation_factors = np.arange(40)
+    # extrapolation_factors = np.arange(1,15, 0.25)
     thresholds = make_thresholds(info_container)
     thresholds_rmsd = convert_thresholds_to_rmsd(
         diffmap, thresholds, map_sampling=map_sampling
@@ -2412,9 +2441,7 @@ def vary_choices():
         plt.grid()
         # plt.savefig(f"{diffmap_path}{filestart}_best_guess_vs_sigma.png")
         plt.show()
-
-def main():
-    # pdbloc_light, map_xtrs = load_photolyase_paths()
+def load_defaults():
     filename_dict = {
         "save_fig": True,
         "display": False,
@@ -2422,20 +2449,15 @@ def main():
         "rerun_old_only": False,
         "rescaling_diffmaps": True,
     }
-    if filename_dict.get("rescaling_diffmaps", False):
-        xtr_settings = {
-        }
+
     
     defaults_to_overwrite = {
             "mid_xtr_factor": 8,
             "max_xtr_factor": 40,
             "minimum_threshold": 0.25,
+            "save_extrapolated": True,
+            "dark_phases": False
         }
-
-    rescale_key = "vanilla_diffmap"
-    diffmap_ids = ["tv"]
-    diffmap_ids = ["kweighted"]
-    diffmap_ids = ["kweighted", "tv"]
     function_selection = [
         "single_negsum_overview",
         "many_negsum_best_guess",
@@ -2445,6 +2467,16 @@ def main():
         "show_comparison",
     ]
     blob_selection_func = find_most_positive_blobs_fixed_basis
+    return filename_dict, defaults_to_overwrite, function_selection, blob_selection_func
+
+def main():
+    # pdbloc_light, map_xtrs = load_photolyase_paths()
+    filename_dict, defaults_to_overwrite, function_selection, blob_selection_func = load_defaults()
+    
+    rescale_key = "vanilla_diffmap"
+    diffmap_ids = ["tv"]
+    diffmap_ids = ["kweighted"]
+    # diffmap_ids = ["kweighted", "tv"]
 
     info_containers = load_inputs()
 
@@ -2471,7 +2503,10 @@ def main():
             diffmaps = rescaling_diffmaps(diffmaps, rescale_key)
 
         for diffmap_id in diffmap_ids:
+            info_container["sigma"] = 12 if diffmap_id == "kweighted" else 12
             info_container["sigma"] = 3 if diffmap_id == "kweighted" else 4.5
+            # info_container["sigma"] = 2. if diffmap_id == "kweighted" else 4.5
+            # info_container["sigma"] = 5 if diffmap_id == "kweighted" else 8.5
 
             diffmap = diffmaps[diffmap_id]
             logger.info(f"\nrunning {info_container['tname']}: {diffmap_id}\n")
@@ -2501,7 +2536,9 @@ def load_inputs():
     folders3 = load_doeke_paths()
     folders4 = load_ocp_paths()
     folders5 = load_maxiv_paths()
+    # folders6 = load_cistrans_paths()
     folders = folders4 + folders1#+folders5  + folders1 # + folders1# + folders2 + folders3
+    folders = folders3
     return folders
 
 
