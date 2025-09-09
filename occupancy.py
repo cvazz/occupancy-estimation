@@ -1,17 +1,11 @@
+import logging
+
 import numpy as np
-import matplotlib.pyplot as plt
+from scipy import ndimage, stats
 from scipy.stats import pearsonr
-from scipy import ndimage
-from scipy import stats
 
+logger = logging.getLogger(__name__)
 
-from generate_objects import (
-    make_objs,
-    make_working_vars,
-    generate_obj,
-    generate_obj_cistrans,
-    get_fig_folders,
-)
 
 ################################################################################
 ######################### Data preparation #####################################
@@ -19,7 +13,13 @@ from generate_objects import (
 
 
 def make_f_xtr(
-    alphas, f_dark, f_light, f_angle, version, noise_level=0, poisson_noise=-1
+    alphas,
+    f_dark,
+    f_light,
+    f_angle,
+    version,  # noqa: ignore
+    noise_level=0,
+    poisson_noise=-1,  # ignore
 ):
     """
     Make extrapolated structure factor amplitudes.
@@ -46,33 +46,17 @@ def make_f_xtr(
     ndarray
         Array of extrapolated structure factors
     """
-
     f_dark_abs = np.abs(f_dark)
     f_light_abs = np.abs(f_light)
     noise = np.random.normal(size=f_dark_abs.shape) * np.mean(f_dark_abs) * noise_level
     delta_f = (f_light_abs - f_dark_abs) + noise
     delta_f_with_phase = delta_f * np.exp(1j * f_angle)
     many_none = (None,) * f_dark.ndim
-    f_xtr_abs = np.abs(
-        2 / alphas[(slice(None), *many_none)] * (delta_f)[None, ...]
-        + f_dark_abs[None, ...]
-    )
-    if poisson_noise > 0:
-        pixel_count = poisson_noise / f_xtr_abs.sum()
-        f_xtr_abs = np.random.poisson(f_xtr_abs * pixel_count) / pixel_count
 
-    match version:
-        case 1:
-            f_xtr = (
-                2 / alphas[(slice(None), *many_none)] * (delta_f_with_phase[None, ...])
-                + f_dark[None, ...]
-            )
-        case 2:
-            f_xtr = f_xtr_abs * np.exp(1j * f_angle)[None, ...]
-        case 3:
-            f_xtr = 2 / alphas * f_light
-        case 4:
-            pass
+    f_xtr = (
+        1 / alphas[(slice(None), *many_none)] * (delta_f_with_phase[None, ...])
+        + f_dark[None, ...]
+    )
 
     return f_xtr
 
@@ -145,8 +129,9 @@ def get_fits(neg_sum, alpha_invs, n_largest):
     res_lowest = stats.linregress(alpha_invs[m_lowest], -neg_sum[m_lowest])
     res_biggest = stats.linregress(alpha_invs[m_biggest], -neg_sum[m_biggest])
     alpha_line = np.linspace(np.min(alpha_invs), np.max(alpha_invs), 5)
-    fit_lowest = res_lowest.intercept + res_lowest.slope * alpha_line
-    fit_biggest = res_biggest.intercept + res_biggest.slope * alpha_line
+    fit_lowest = res_lowest.intercept + res_lowest.slope * alpha_line  # pyright:  ignore
+    fit_biggest = res_biggest.intercept + res_biggest.slope * alpha_line  # pyright:  ignore
+
     return alpha_line, fit_lowest, fit_biggest
 
 
@@ -163,6 +148,7 @@ def marius(f_xtrs, mask=None):
         # print(ii, neg_sum[ii])
     return densities, neg_sum
 
+
 def negsum_explode(dens_xtrs, mask=None):
     mask = np.ones(dens_xtrs.shape[1:], bool) if mask is None else mask
     arrlen = len(dens_xtrs)
@@ -170,7 +156,8 @@ def negsum_explode(dens_xtrs, mask=None):
     for ii, dens in enumerate(dens_xtrs):
         dens = dens[mask]
         neg_sum[ii] = np.sum(dens[dens < 0])
-    return  neg_sum
+    return neg_sum
+
 
 def marius_masked(f_xtrs, mask_pks):
     arrlen = len(f_xtrs)
@@ -187,7 +174,7 @@ def marius_masked(f_xtrs, mask_pks):
 ############################### Xtrapol8 #######################################
 
 
-def x8_density_map_f1(f_xtrs, mask_pks, fofo, obj0):
+def x8_density_map_f1(f_xtrs, mask_pks, fofo, obj0):  # Pyright: ignore
     arrlen = len(f_xtrs)
     peak_sum = np.empty((arrlen))
     real_CC = np.empty((arrlen))
@@ -299,7 +286,7 @@ def root_finding2(f_xtrs, alpha_xtrs):
 
 def root_finding_blobs(f_xtrs, alpha_xtrs, mask_pks_neg):
     dens_xtrs = np.array([np.fft.ifftn(f_xtr).real for f_xtr in f_xtrs])
-    blobs, blob_number = ndimage.label(mask_pks_neg)
+    blobs, blob_number = ndimage.label(mask_pks_neg)  # pyright: ignore
     adiff = np.diff(alpha_xtrs)  # determine whether counting up or down
     assert (np.sign(adiff) == np.sign(adiff)[0]).all()
     assert np.sign(adiff)[0] != 0
@@ -317,9 +304,9 @@ def root_finding_blobs(f_xtrs, alpha_xtrs, mask_pks_neg):
     return changing_at
 
 
-def root_finding_blobs2(f_xtrs, alpha_xtrs, mask_pks_neg):
+def root_finding_blobs2(f_xtrs: list[np.ndarray], alpha_xtrs: list, mask_pks_neg):
     dens_xtrs = np.array([np.fft.ifftn(f_xtr).real for f_xtr in f_xtrs])
-    blobs, blob_number = ndimage.label(mask_pks_neg)
+    blobs, blob_number = ndimage.label(mask_pks_neg)  # pyright: ignore
     adiff = np.diff(alpha_xtrs)  # determine whether counting up or down
     assert (np.sign(adiff) == np.sign(adiff)[0]).all()
     assert np.sign(adiff)[0] != 0

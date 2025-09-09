@@ -26,6 +26,7 @@ except ImportError:
 try:
     import meteor
     from meteor import sfcalc
+    from meteor import rsmap
 except ImportError:
     print("meteor not available")
 
@@ -186,7 +187,7 @@ def get_pdb_pairs(choose_experiment: str):
 
 
 def generate_obj_cistrans(imagetype, mean_value_offset=0):
-    dataloc = get_base_folder()+"/../synthetic_cistrans/"
+    dataloc = get_base_folder() + "/../synthetic_cistrans/"
     match imagetype:
         case "cistrans_nonoise":
             name_dark = "trans_sf.mtz"
@@ -294,14 +295,16 @@ def generate_obj_v2(imagetype, kwargs={}):
     return generate_obj_cistrans(imagevariant, mean_value_offset)
 
 
-def struc2kspace(struc, hs_limit, noise_level):
+def struc2kspace(struc, hs_limit, f_noise, phi_noise=0):
     map_vals = meteor.sfcalc.gemmi_structure_to_calculated_map(
         struc, high_resolution_limit=hs_limit
     )
     struc_vals = rs.DataSet(map_vals)
-    noise = np.random.normal(loc=0.0, scale=noise_level * np.abs(struc_vals["F"]))
+
+    noise = np.random.normal(loc=0.0, scale=f_noise * np.abs(struc_vals["F"]))
     struc_vals["F"] = struc_vals["F"] + noise
-    struc_vals["SIGF"] = noise_level + 0.01
+    struc_vals["PHI"] = add_phase_error(struc_vals["PHI"], mpe_deg=phi_noise)
+    struc_vals["SIGF"] = f_noise + 0.01
     struc_vals["SIGF"] = struc_vals["SIGF"].astype("Q")
     return struc_vals
 
@@ -313,7 +316,56 @@ def get_k2real(struc_vals, addon=""):
     return struc_vals_real
 
 
-def struc2realspace(struc, hs_limit, noise_level):
+def kappa_from_mpe_deg(mpe_deg: float) -> float:
+    """
+    Approximate von Mises concentration parameter κ
+    from a target mean phase error (MPE) in degrees.
+
+    Uses R ≈ cos(MPE) and Best & Fisher 1981 approximations.
+    """
+    # convert to radians
+    mpe_rad = np.deg2rad(mpe_deg)
+    # figure of merit (approx.)
+    R = np.cos(mpe_rad)
+
+    # Best & Fisher piecewise approximation
+    if R < 0.53:
+        kappa = 2 * R + R**3 + (5 * R**5) / 6
+    elif R < 0.85:
+        kappa = -0.4 + 1.39 * R + 0.43 / (1 - R)
+    else:
+        kappa = 1 / (3 * R - 4 * R**2 + R**3)
+
+    return float(kappa)
+
+
+def add_phase_error(phases_deg, mpe_deg, rng=None):
+    """
+    Add von Mises-distributed noise to an array of phases (in degrees).
+    Returns noisy phases in degrees.
+    """
+    if rng is None:
+        rng = np.random.default_rng()
+    if mpe_deg < 1e-4:
+        return phases_deg
+
+    # get κ from target mean phase error
+    kappa = kappa_from_mpe_deg(mpe_deg)
+
+    # sample noise around 0 with concentration κ
+    noise = rng.vonmises(mu=0.0, kappa=kappa, size=len(phases_deg))
+
+    # add noise to phases (convert phases to radians)
+    noisy = np.deg2rad(phases_deg) + noise
+
+    # wrap back into [0, 360)
+    return np.mod(np.rad2deg(noisy), 360.0)
+
+
+# --- Example ---
+
+
+def struc2realspace(struc, hs_limit, noise_level, phi_noise=0.0):
     """
     Convert a molecular structure to real space electron density map with optional noise.
 
@@ -345,6 +397,7 @@ def struc2realspace(struc, hs_limit, noise_level):
     struc_vals = rs.DataSet(map_vals)
     noise = np.random.normal(loc=0.0, scale=noise_level * np.abs(struc_vals["F"]))
     struc_vals["F"] = struc_vals["F"] + noise
+    struc_vals["PHI"] = add_phase_error(struc_vals["PHI"], mpe_deg=phi_noise)
     struc_vals["sf"] = struc_vals.to_structurefactor("F", "PHI")
     struc_vals_grid = struc_vals.to_reciprocal_grid("sf")
     struc_vals_real = np.fft.ifftn(struc_vals_grid).real
@@ -363,10 +416,13 @@ def overwrite_occupancy(struc, new_occ):
     return struc
 
 
-def generate_obj_cistrans_v2(occupancy, noise_level, no_negs=False, scaleit=True):
-    hs_limit = 1.6
-    identifier = f"ct_occ_{occupancy*100:.0f}_noise_{noise_level*100:.0f}"
-    dataloc = get_base_folder()+"/../synthetic_cistrans/"
+def generate_obj_cistrans_v2(
+    occupancy, f_noise, phi_noise=0.0, no_negs=False, scaleit=True, hs_limit=1.6
+):
+    # assert phi_noise is number
+    assert isinstance(phi_noise, (int, float)), "phi_noise must be a number"
+    identifier = f"ct_occ_{occupancy*100:.0f}_noise_{f_noise*100:.0f}"
+    dataloc = get_base_folder() + "/../synthetic_cistrans/"
     pdbname_dark = "trans.pdb"
     pdbname_light = "100ps.pdb"
 
@@ -375,22 +431,22 @@ def generate_obj_cistrans_v2(occupancy, noise_level, no_negs=False, scaleit=True
 
     struc_light = overwrite_occupancy(struc_light, occupancy)
     if scaleit:
-        mtz_dark = struc2kspace(struc_dark, hs_limit, noise_level)
-        mtz_light = struc2kspace(struc_light, hs_limit, noise_level)
+        mtz_dark = struc2kspace(struc_dark, hs_limit, f_noise, phi_noise)
+        mtz_light = struc2kspace(struc_light, hs_limit, f_noise)
         mtz_combined = run_scaleit(mtz_dark, mtz_light, False)
         obj0 = get_k2real(
             mtz_combined,
         )
         obj1 = get_k2real(mtz_combined, "2")
     else:
-        obj0 = struc2realspace(struc_dark, hs_limit, noise_level)
-        obj1 = struc2realspace(struc_light, hs_limit, noise_level)
+        obj0 = struc2realspace(struc_dark, hs_limit, f_noise, phi_noise)
+        obj1 = struc2realspace(struc_light, hs_limit, f_noise)
 
     if no_negs:
-        minobj1 = np.min(obj1)
-        if minobj1 < 0:
-            obj0 -= np.min(obj1)
-            obj1 -= minobj1
+        minobj = np.min(obj0)
+        if minobj < 0:
+            obj0 -= minobj
+            obj1 -= minobj
 
     f_dark = np.fft.fftn(obj0)
     f_light = np.fft.fftn(obj1)
@@ -398,6 +454,26 @@ def generate_obj_cistrans_v2(occupancy, noise_level, no_negs=False, scaleit=True
     delta_fa_abs = np.abs(f_light) - np.abs(f_dark)
 
     return obj0, obj1, f_dark, f_light, delta_fa_abs, identifier
+
+def generate_obj_cistrans_v3(
+    occupancy, f_noise, phi_noise=0.0, no_negs=False, scaleit=True, hs_limit=1.6
+):
+    # assert phi_noise is number
+    assert isinstance(phi_noise, (int, float)), "phi_noise must be a number"
+    dataloc = get_base_folder() + "/../synthetic_cistrans/"
+    pdbname_dark = "trans.pdb"
+    pdbname_light = "100ps.pdb"
+
+    struc_dark = gemmi.read_structure(dataloc + pdbname_dark)
+    struc_light = gemmi.read_structure(dataloc + pdbname_light)
+
+    struc_light = overwrite_occupancy(struc_light, occupancy)
+    mtz_dark = struc2kspace(struc_dark, hs_limit, f_noise, phi_noise)
+    mtz_light = struc2kspace(struc_light, hs_limit, f_noise)
+    map_dark = rsmap.Map(mtz_dark)
+    map_light = rsmap.Map(mtz_light)
+    return map_dark, map_light
+
 
 
 ################# scaleit###############
@@ -445,7 +521,7 @@ def comb_strucs(struc_vals, struc_vals2=None):
         struc_vals["PHI2"] = struc_vals2["PHI"]
         struc_vals["SIGF2"] = struc_vals2["SIGF"]
 
-    mtz_to_scaleit = temp_folder +"to_scaleit.mtz"
+    mtz_to_scaleit = temp_folder + "to_scaleit.mtz"
     struc_vals.write_mtz(mtz_to_scaleit)
     return mtz_to_scaleit, struc_vals
 
@@ -479,9 +555,8 @@ def run_scaleit(
 
     os.system("chmod +x %s" % (script_scaleit))
     logger.info("Running scaleit, see %s" % (script_scaleit))
-    print("Running scaleit, see %s" % (script_scaleit))
     os.system("./%s" % (script_scaleit))
-    print("scaleit done, see %s" % (script_scaleit))
+    logger.info("scaleit done, see %s" % (script_scaleit))
 
     df = rs.read_mtz(mtz_fromscaleit)
 

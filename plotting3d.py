@@ -103,10 +103,11 @@ def make_extent(arr_shape, origin, delta):
 
 def mtz_comp(
     frac_list,
-    mask,
     mtzdata,
+    mask=None,
     gif_name="",
     extent=None,
+    start_idx=0
 ):
     startval = 10
     kk = 0
@@ -144,7 +145,7 @@ def mtz_comp(
     ax.legend(loc="center left", bbox_to_anchor=(1, 0.5))
 
     @widgets.interact(f0=(0, len(xline) - 1, 1))
-    def update(f0=0):
+    def update(f0=start_idx):
         # divline.set_ydata(zloc[:,xline ==xline[f0]])
         # divline2.set_ydata(zloc2[:,xline ==xline[f0]])
         im.set_data(mtzdata[f0])
@@ -462,7 +463,7 @@ def add_fit(neg_sum, alpha_invs, n_largest, ax=None, kwargs={}):
     )
 
 
-def neg_sum_explosion(alpha_invs, neg_sum, config, n_largest=0, n_more=0, title=""):
+def neg_sum_explosion(alpha_invs, neg_sum, config, n_largest=0, n_more=0, title="", savefig=False):
     # alpha_line, fit_biggest2, fit_lowest2 = get_fits(neg_sum, alpha_invs, n_more)
 
     fig = plt.figure()
@@ -478,7 +479,8 @@ def neg_sum_explosion(alpha_invs, neg_sum, config, n_largest=0, n_more=0, title=
     plt.ylabel(r"$\sum$ $|$neg. density$|$")
     plt.title(title)
     fname = "negsumexplosion"
-    savefig(fig, config, fname)
+    if savefig:
+        savefig(fig, config, fname)
 
 
 def diffmap_versions(display_tup, alpha_xtrs, f_xtrs, mask_pks, obj0, delta_obj):

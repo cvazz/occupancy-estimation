@@ -65,7 +65,7 @@ def scale_structure_factors(ds_dark, ds_light, dark_columns, light_columns):
     return ds_scaleit, light_columns2, dark_columns2
 
 
-def get_photolyase_maps(ds_dark, ds_light):
+def get_photolyase_maps(ds_dark, ds_light, dark_phases=True):
     make_dict = lambda **x: x
     dark_columns = make_dict(
         amplitude_column="F-obs-filtered",
@@ -76,7 +76,8 @@ def get_photolyase_maps(ds_dark, ds_light):
     light_columns = make_dict(
         amplitude_column="F", uncertainty_column="SIGF", phase_column="PHIF-model"
     )
-    ds_light[light_columns["phase_column"]] = ds_dark[dark_columns["phase_column"]]
+    if dark_phases:
+        ds_light[light_columns["phase_column"]] = ds_dark[dark_columns["phase_column"]]
     unscaled_dark = rsmap.Map(ds_dark, **dark_columns)
     unscaled_light = rsmap.Map(ds_light, **light_columns)
     scaled_light = scale_maps(reference_map=unscaled_dark, map_to_scale=unscaled_light)
@@ -267,10 +268,19 @@ def process_many_negsum(intersection_points, weight, masks=None):
     finite_intersections = np.isfinite(intersection_points)
     masked_intersect = intersection_points[finite_intersections]
     masked_weight = weight[finite_intersections]
-    intersection_average = np.average(masked_intersect, weights=masked_weight)
-    intersection_std = np.sqrt(np.cov(masked_intersect, aweights=masked_weight))
-    intersection_average_inv = np.average(1 / masked_intersect, weights=masked_weight)
-    intersection_std_inv = np.sqrt(np.cov(1 / masked_intersect, aweights=masked_weight))
+    try:
+        intersection_average = np.average(masked_intersect, weights=masked_weight)
+        intersection_std = np.sqrt(np.cov(masked_intersect, aweights=masked_weight))
+    except ZeroDivisionError:
+        logger.error("No valid intersection points found.")
+        intersection_average = np.nan
+        intersection_std = np.nan
+    try:
+        intersection_average_inv = np.average(1 / masked_intersect, weights=masked_weight)
+        intersection_std_inv = np.sqrt(np.cov(1 / masked_intersect, aweights=masked_weight))
+    except ZeroDivisionError:
+        intersection_average_inv = np.nan
+        intersection_std_inv = np.nan
 
     logstart = "Intersection Average"
     log_msg = f"{logstart}: {intersection_average:.2f} ± {intersection_std:.2f}"
