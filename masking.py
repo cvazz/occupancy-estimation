@@ -161,10 +161,9 @@ def minimum_blob_size(all_neg_blobs, min_blob_size, cell):
 
 def positive_density_blocking(diffmap, mask_np, config):
 
-    blocking_default = 99
     map_sampling = config["general"]["map_sampling"]
     parameters = config["masking"]
-    blocking_percentile = parameters.get("blocking_percentile", blocking_default)
+    blocking_percentile = parameters["blocking_percentile"]
     blocking_radius = parameters["blocking_radius"]
 
     ccp4diff = diffmap.to_ccp4_map(map_sampling=map_sampling)
@@ -188,7 +187,7 @@ def positive_density_blocking(diffmap, mask_np, config):
     excluded_share = np.sum(excluded) / np.sum(mask_np)
 
     log_text = f"Excluding {np.sum(excluded)} ({excluded_share:.2%}) voxels from mask"
-    log_text += f" due to positive density within {parameters['blocking_radius']} A and above the {parameters.get('blocking_percentile', blocking_default)} percentile"
+    log_text += f" due to positive density within {parameters['blocking_radius']} A and above the {parameters['blocking_percentile']} percentile"
     log_text += " (control via 'blocking_radius' and 'blocking_percentile' parameters)"
     logger.info(log_text)
     mask_np = np.logical_and(mask_np, ~pos_mask)

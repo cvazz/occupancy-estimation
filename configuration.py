@@ -1,3 +1,15 @@
+import os
+
+
+def load_homepath():
+    # This function returns the path in which t
+    current_path = os.getcwd()
+    path_parts = current_path.split(os.sep)
+    idx = path_parts.index("time_resolved")
+    homepath = os.sep.join(path_parts[: idx + 1]) + "/"
+    return homepath
+
+
 def get_file_config(
     dataloc_dark,
     dataloc_light,
@@ -28,6 +40,7 @@ def get_file_config(
             "sigma": 3,
             "min_blob_size": 3,  # in A^3
             "blocking_radius": 1.5,
+            "blocking_percentile": 95,
             "exclude_solvent": True,
             "exclude_negative_dark": True,
             "exclude_large_occupancy_outliers": False,
@@ -36,6 +49,7 @@ def get_file_config(
             "diffmap_type": "tv",
             "dark_mean_correction": True,
             "diffmap_mean_correction": True,
+            "diffmap_v2_correction": False,
         },
         "plot": {
             "show_ignored_voxels": True,

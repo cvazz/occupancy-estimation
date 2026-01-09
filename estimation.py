@@ -6,6 +6,7 @@ from logger import setup_logger
 
 logger = setup_logger()
 
+
 def weighted_std(values: np.ndarray, weights: np.ndarray) -> tuple:
     """
     Calculate the weighted standard deviation.
@@ -16,6 +17,7 @@ def weighted_std(values: np.ndarray, weights: np.ndarray) -> tuple:
     variance = np.average((values - weighted_mean) ** 2, weights=weights)
 
     return weighted_mean, np.sqrt(variance)
+
 
 def _calculate_statistics(
     diffmap_np: np.ndarray, map_dark_np: np.ndarray, mask_np: np.ndarray
@@ -40,10 +42,13 @@ def _calculate_statistics(
     }
 
 
-def _analyze_threshold_trends(diffmap_vals: np.ndarray, pseudo_occupancy: np.ndarray, weights: np.ndarray):
+def _analyze_threshold_trends(
+    diffmap_vals: np.ndarray, pseudo_occupancy: np.ndarray, weights: np.ndarray
+):
     """
     Iterates through intensity thresholds to calculate running means and standard deviations.
     """
+
     def reweight(weights):
         return weights
 
@@ -54,11 +59,7 @@ def _analyze_threshold_trends(diffmap_vals: np.ndarray, pseudo_occupancy: np.nda
     means, stds = [], []
     stability = []
 
-    # Prefactor for uncertainty calculation
-    max_weight_idx = np.argmax(weights)
-
-
-    prefactor = reweight(np.max(weights)) * (pseudo_occupancy[max_weight_idx])
+    prefactor = reweight(np.max(weights)) * (pseudo_occupancy[np.argmax(weights)])
 
     for thresh in threshold:
         # Select voxels exceeding threshold
@@ -184,9 +185,7 @@ def plot_extrapolation_estimate(
     general_config = config["general"]
 
     diffmap_np = diffmap.to_3d_numpy_map(map_sampling=general_config["map_sampling"])
-    map_dark_np = map_dark.to_3d_numpy_map(
-        map_sampling=general_config["map_sampling"]
-    )
+    map_dark_np = map_dark.to_3d_numpy_map(map_sampling=general_config["map_sampling"])
     logger.warning(
         f"Mean of diffmap_np: {np.mean(diffmap_np)}, Mean of map_dark_np: {np.mean(map_dark_np)}"
     )
