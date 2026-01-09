@@ -246,16 +246,6 @@ def prepare_maps(unscaled_dark, unscaled_triggered, config):
     )
 
     if config["map_processing"]["dark_mean_correction"]:
-        map_dark, zero_freq_dark = autoshift_rsmap(
-            map_dark,
-            map_dark_comp,
-            config["general"],
-        )
-
-    if config["map_processing"]["diffmap_mean_correction"]:
-        # diffmap_temp = combined_diffmap_calc(
-        #     map_dark, map_triggered, map_dark_comp, "vanilla"
-        # )
         diffmap_temp = combined_diffmap_calc(
             map_dark,
             map_triggered,
@@ -272,44 +262,27 @@ def prepare_maps(unscaled_dark, unscaled_triggered, config):
             f"diffmap larger voxel count: {np.sum(diffmap_larger)/diffmap_larger.size}"
         )
 
+        map_dark, zero_freq_dark = autoshift_rsmap(
+            map_dark,
+            map_dark_comp,
+            config["general"],
+        )
         logger.info("calculating autoshift for triggered map... with extra mask")
         map_triggered, zero_freq_triggered = autoshift_rsmap(
             map_triggered, map_dark_comp, config["general"], diffmap_larger
         )
         logger.info("calculating autoshift for triggered map... done")
 
-    # zero_column = {}
-    # zero_column[diffmap.amplitude_column_name] = triggered_shift["F"] - dark_shift["F"]
-    # zero_column[diffmap.phase_column_name] = 0
-    # zero_column[diffmap.uncertainties_column_name] = np.sqrt(dark_shift["SIGF"]**2 + triggered_shift["SIGF"]**2)
-    # logger.info("diffmap zero column:", zero_column)
-
-    # # return diffmap, map_dark
-
-    # new_index = pd.MultiIndex.from_tuples(
-    # [(0, 0, 0)],
-    # names=map_dark.index.names,
-    # )
-
-    # # 2. Create the new row
-    # new_row = pd.DataFrame(zero_column, index=new_index)
-    # diffmap_out = pd.concat([diffmap, new_row])
-    # print(diffmap.dtypes)
-    # print(diffmap.index.dtypes)
-    # diffmap_out.infer_mtz_dtypes(inplace=True)
-    # diffmap_out.cell = diffmap.cell
-    # diffmap_out.spacegroup = diffmap.spacegroup
-
-    # print(diffmap.dtypes)
-    # print(diffmap.index.dtypes)
-    # logger.info("diffmap_added")
-    diffmap = combined_diffmap_calc(
-        map_dark,
-        map_triggered,
-        map_dark_comp,
-        diffmap_type=config["map_processing"]["diffmap_type"],
-        general_config=config["general"],
-    )
+    if not config["map_processing"]["diffmap_v2_correction"]:
+        diffmap = combined_diffmap_calc(
+            map_dark,
+            map_triggered,
+            map_dark_comp,
+            diffmap_type=config["map_processing"]["diffmap_type"],
+            general_config=config["general"],
+        )
+    else:
+        diffmap = diffmap_temp
     logger.info(f"Diffmap zero frequency: {diffmap.loc[(0,0,0)]['F']}")
     if config["map_processing"]["diffmap_mean_correction"]:
         zero_freq_diff = zero_freq_triggered - zero_freq_dark
@@ -317,11 +290,11 @@ def prepare_maps(unscaled_dark, unscaled_triggered, config):
             (zero_freq_dark * 0.1) ** 2 + (zero_freq_triggered * 0.1) ** 2
         )
 
-        diffmap_temp.loc[(0, 0, 0)] = {
+        diffmap.loc[(0, 0, 0)] = {
             diffmap.amplitude_column_name: zero_freq_diff,
             diffmap.phase_column_name: 0,
             diffmap.uncertainties_column_name: zero_uncertainty,
         }
         logger.warning(f"Diffmap zero frequency: {zero_freq_diff}")
 
-    return diffmap_temp, map_dark, map_triggered
+    return diffmap, map_dark, map_triggered
