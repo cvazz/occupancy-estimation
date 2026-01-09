@@ -1,0 +1,48 @@
+def get_file_config(
+    dataloc_dark,
+    dataloc_light,
+    pdbloc_dark,
+    columns_dark,
+    columns_triggered,
+    high_resolution_limit,
+    name_machine,
+    name_human=None,
+):
+    config = {
+        "general": {
+            "name_human": name_human if name_human else name_machine,
+            "name_machine": name_machine,
+            "output_base_folder": ".",
+            "map_sampling": 3,
+            "high_resolution_limit": high_resolution_limit,
+        },
+        "input_files": {
+            "map_dark": dataloc_dark,
+            "map_triggered": dataloc_light,
+            "pdb_dark": pdbloc_dark,
+            "columns_dark": columns_dark,
+            "columns_triggered": columns_triggered,
+            "impose_dark_phases": True,
+        },
+        "masking": {
+            "sigma": 3,
+            "min_blob_size": 3,  # in A^3
+            "blocking_radius": 1.5,
+            "exclude_solvent": True,
+            "exclude_negative_dark": True,
+            "exclude_large_occupancy_outliers": False,
+        },
+        "map_processing": {
+            "diffmap_type": "tv",
+            "dark_mean_correction": True,
+            "diffmap_mean_correction": True,
+        },
+        "plot": {
+            "show_ignored_voxels": True,
+        },
+    }
+
+    output_folder = config["general"]["output_base_folder"] + "/" + name_machine + "/"
+    config["general"]["output_folder"] = output_folder
+    config["general"]["pdbloc_dark"] = pdbloc_dark
+    return config
