@@ -25,7 +25,7 @@ from logger import setup_logger
 logger = setup_logger()
 
 
-def get_maps(input_files_dict):
+def get_maps(input_files_dict: dict) -> tuple[rsmap.Map, rsmap.Map]:
     high_res_limit = input_files_dict["general"]["high_resolution_limit"]
 
     dataloc_dark = input_files_dict["input_files"]["map_dark"]
@@ -53,22 +53,28 @@ def get_maps(input_files_dict):
 
 
 def check_highres_limit(
-    map_dark: rsmap.Map, map_triggered: rsmap.Map, info_container: dict
+    map_dark: rsmap.Map, map_triggered: rsmap.Map, general_config: dict
 ):
     dmin_dark = map_dark.compute_dHKL().min()
     dmin_triggered = map_triggered.compute_dHKL().min()
+    high_res_limit = np.round(max(dmin_dark, dmin_triggered), 1)
 
     if not np.isclose(dmin_dark, dmin_triggered):
-        high_res_limit = np.round(max(dmin_dark, dmin_triggered), 1)
         logger.warning(
             f"Different resolution limits in dark and triggered maps: {dmin_dark:.2f} A vs {dmin_triggered:.2f} A"
         )
-        logger.warning(f"Changing high-resolution limit to {high_res_limit:.2f} A")
-        info_container["high_resolution_limit"] = high_res_limit
-        map_dark = cut_resolution(map_dark, high_resolution_limit=high_res_limit)
+        general_config["high_resolution_limit"] = high_res_limit
+        map_dark = cut_resolution(map_dark, high_resolution_limit=high_res_limit)  # type: ignore
         map_triggered = cut_resolution(
             map_triggered, high_resolution_limit=high_res_limit
+        )  # type: ignore
+
+    if not np.isclose(high_res_limit, general_config["high_resolution_limit"]):
+        prev_dmin = general_config["high_resolution_limit"]
+        logger.warning(
+            f"Changing high-resolution limit from {prev_dmin:.2f} A to {high_res_limit:.2f} A"
         )
+        general_config["high_resolution_limit"] = high_res_limit
     return map_dark, map_triggered
 
 
@@ -78,7 +84,7 @@ def calculate_diffmaps(
     map_dark_comp: rsmap.Map,
     meta_loc: str = "",
     only_kweighted: bool = False,
-    parameters: dict={},
+    parameters: dict = {},
 ):
     overwrite_solution = parameters.get("overwrite_solution", False)
     calculate_again = bool(parameters.get("k_weight", False)) or (
@@ -193,7 +199,7 @@ def autoshift_rsmap(
     config: dict,
     ignore_mask: np.ndarray | bool = False,
     diagnostic_plots: bool = False,
-):
+) -> tuple[rsmap.Map, float]:
     map_sampling = config["map_sampling"]
     pdbloc_dark = config["pdbloc_dark"]
 
@@ -207,7 +213,7 @@ def autoshift_rsmap(
     include_mask = ~ignore_mask
     if ignore_mask.all():
         logger.warning("All voxels are ignored in autoshift; no shift applied.")
-        return map_in
+        return map_in, 0
     shifts = map_dark_comp_np[include_mask] - rsmap_np[include_mask]
     if diagnostic_plots:
         plt.figure()
@@ -232,10 +238,12 @@ def autoshift_rsmap(
     return map_in, zero_freq
 
 
-def prepare_maps(unscaled_dark, unscaled_triggered, config):
+def prepare_maps(
+    unscaled_dark: rsmap.Map, unscaled_triggered: rsmap.Map, config: dict
+) -> tuple[rsmap.Map, rsmap.Map, rsmap.Map]:
 
     struc = gemmi.read_pdb(config["input_files"]["pdb_dark"])
-    check_highres_limit(unscaled_dark, unscaled_triggered, config["input_files"])
+    check_highres_limit(unscaled_dark, unscaled_triggered, config["general"])
     map_dark_comp = gemmi_structure_to_calculated_map(
         struc, high_resolution_limit=config["general"]["high_resolution_limit"]
     )
@@ -282,13 +290,21 @@ def prepare_maps(unscaled_dark, unscaled_triggered, config):
             general_config=config["general"],
         )
     else:
-        diffmap = diffmap_temp
-    logger.info(f"Diffmap zero frequency: {diffmap.loc[(0,0,0)]['F']}")
+        if config["map_processing"]["dark_mean_correction"]:
+            diffmap = diffmap_temp  # type: ignore
+        else:
+            raise ValueError("Diffmap not defined")
+    logger.info(f"Diffmap zero frequency: {diffmap.loc[(0,0,0)]['F']}") # type: ignore
     if config["map_processing"]["diffmap_mean_correction"]:
-        zero_freq_diff = zero_freq_triggered - zero_freq_dark
-        zero_uncertainty = np.sqrt(
-            (zero_freq_dark * 0.1) ** 2 + (zero_freq_triggered * 0.1) ** 2
-        )
+        if config["map_processing"]["dark_mean_correction"]:
+            zero_freq_diff = zero_freq_triggered - zero_freq_dark  # type: ignore
+            zero_uncertainty = np.sqrt(
+                (zero_freq_dark * 0.1) ** 2 + (zero_freq_triggered * 0.1) ** 2  # type: ignore
+            )
+        else:
+            raise ValueError(
+                "Diffmap Correction can only be done if dark correction is done"
+            )
 
         diffmap.loc[(0, 0, 0)] = {
             diffmap.amplitude_column_name: zero_freq_diff,

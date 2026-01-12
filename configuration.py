@@ -11,20 +11,21 @@ def load_homepath():
 
 
 def get_file_config(
-    dataloc_dark,
-    dataloc_light,
-    pdbloc_dark,
-    columns_dark,
-    columns_triggered,
-    high_resolution_limit,
-    name_machine,
-    name_human=None,
+    dataloc_dark: str,
+    dataloc_light: str,
+    pdbloc_dark: str,
+    columns_dark: dict,
+    columns_triggered: dict,
+    high_resolution_limit: float = 0.1,
+    name_machine: str = "unnamed_experiment",
+    name_human: str | None = None,
+    outpath: str | None = None,
 ):
     config = {
         "general": {
             "name_human": name_human if name_human else name_machine,
             "name_machine": name_machine,
-            "output_base_folder": ".",
+            "output_base_folder": outpath if outpath else ".",
             "map_sampling": 3,
             "high_resolution_limit": high_resolution_limit,
         },

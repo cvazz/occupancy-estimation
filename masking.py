@@ -11,7 +11,9 @@ logger = setup_logger()
 
 
 def support_from_masker(
-    pdb_file: str, grid_shape: tuple, radii_set=gemmi.AtomicRadiiSet.Cctbx
+    pdb_file: str,
+    grid_shape: tuple,
+    radii_set: gemmi.AtomicRadiiSet = gemmi.AtomicRadiiSet.Cctbx,
 ):
 
     st = gemmi.read_structure(pdb_file)
@@ -134,11 +136,13 @@ def calculate_all_pos_blobs(diffmap_np: np.ndarray, sigma: float):
     return pos_labeled
 
 
-def voxel_volume(unit_cell_shape, unit_cell: gemmi.UnitCell) -> float:
+def voxel_volume(unit_cell_shape: tuple, unit_cell: gemmi.UnitCell) -> float:
     return unit_cell.volume / np.prod(unit_cell_shape)
 
 
-def minimum_blob_size(all_neg_blobs, min_blob_size, cell):
+def minimum_blob_size(
+    all_neg_blobs: np.ndarray, min_blob_size: float, cell: gemmi.UnitCell
+) -> np.ndarray:
     uniq, counts = np.unique(all_neg_blobs, return_counts=True)
     one_voxel_volume = voxel_volume(all_neg_blobs.shape, cell)
     min_count = min_blob_size / one_voxel_volume
@@ -159,7 +163,7 @@ def minimum_blob_size(all_neg_blobs, min_blob_size, cell):
     return mask_np
 
 
-def positive_density_blocking(diffmap, mask_np, config):
+def positive_density_blocking(diffmap: rsmap.Map, mask_np: np.ndarray, config: dict):
 
     map_sampling = config["general"]["map_sampling"]
     parameters = config["masking"]
@@ -168,7 +172,7 @@ def positive_density_blocking(diffmap, mask_np, config):
 
     ccp4diff = diffmap.to_ccp4_map(map_sampling=map_sampling)
     neighborhood_kernel = radius_mask_minibox_from_ccp4(
-        ccp4diff, diffmap.cell, radius_A=blocking_radius, dtype=np.uint8
+        ccp4diff, diffmap.cell, radius_A=blocking_radius, dtype=np.uint8  # type: ignore
     )
     neighborhood_kernel[tuple(np.array(neighborhood_kernel.shape) // 2 + 1)] = 0
 
@@ -194,7 +198,7 @@ def positive_density_blocking(diffmap, mask_np, config):
     return mask_np
 
 
-def make_inclusion_mask(diffmap: rsmap.Map, map_dark: np.ndarray, config: dict):
+def make_inclusion_mask(diffmap: rsmap.Map, map_dark: rsmap.Map, config: dict):
     """_summary_
 
     Parameters
@@ -247,7 +251,7 @@ def make_inclusion_mask(diffmap: rsmap.Map, map_dark: np.ndarray, config: dict):
 
     ### Impose minimum blob size ###
     mask_np = minimum_blob_size(
-        all_neg_blobs, parameters["min_blob_size"], diffmap.cell
+        all_neg_blobs, parameters["min_blob_size"], diffmap.cell # type: ignore
     )
 
     mask_np = positive_density_blocking(diffmap, mask_np, config)
@@ -279,6 +283,7 @@ def make_inclusion_mask(diffmap: rsmap.Map, map_dark: np.ndarray, config: dict):
             logger.warning(log_text)
 
     if parameters.get("exclude_large_occupancy_outliers", False):
+        map_dark_np = map_dark.to_3d_numpy_map(map_sampling=map_sampling)
         mask_np_before = np.sum(mask_np)
         outliers = (
             np.where(map_dark_np != 0, -diffmap_np / map_dark_np, 0)

@@ -13,7 +13,7 @@ from logger import setup_logger
 logger = setup_logger()
 
 
-def apply_config_rsEGFP2():
+def apply_config_rsEGFP2() -> dict:
     homepath = load_homepath()
     folderloc = homepath + "meteor/test/data/"
     dataloc_dark = folderloc + "scaled-test-data.mtz"
@@ -33,17 +33,17 @@ def apply_config_rsEGFP2():
     high_resolution_limit = 1.6
 
     return get_file_config(
-        dataloc_dark,
-        dataloc_light,
-        pdbloc_dark,
-        columns_dark,
-        columns_triggered,
-        high_resolution_limit,
-        name_machine,
+        dataloc_dark=dataloc_dark,
+        dataloc_light=dataloc_light,
+        pdbloc_dark=pdbloc_dark,
+        columns_dark=columns_dark,
+        columns_triggered=columns_triggered,
+        high_resolution_limit=high_resolution_limit,
+        name_machine=name_machine,
     )
 
 
-def apply_config():
+def apply_config() -> dict:
     homepath = load_homepath()
     folderloc = homepath + "data/photolyase/"
     dataloc_dark = folderloc + "1_superdark/superdark_deposit.mtz"
@@ -76,18 +76,18 @@ def apply_config():
     print(dataloc_light)
 
     return get_file_config(
-        dataloc_dark,
-        dataloc_light,
-        pdbloc_dark,
-        columns_dark,
-        columns_triggered,
-        high_resolution_limit,
-        name_machine,
+        dataloc_dark=dataloc_dark,
+        dataloc_light=dataloc_light,
+        pdbloc_dark=pdbloc_dark,
+        columns_dark=columns_dark,
+        columns_triggered=columns_triggered,
+        high_resolution_limit=high_resolution_limit,
+        name_machine=name_machine,
     )
 
 
-def main():
-    config = apply_config()
+def main() -> None:
+    config = apply_config_rsEGFP2()
     unscaled_dark, unscaled_triggered = get_maps(config)
     diffmap, map_dark, _ = prepare_maps(unscaled_dark, unscaled_triggered, config)
 

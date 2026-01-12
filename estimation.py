@@ -1,5 +1,7 @@
 import numpy as np
 import matplotlib.pyplot as plt
+from matplotlib.figure import Figure
+from matplotlib.axes import Axes
 from meteor import rsmap
 
 from logger import setup_logger
@@ -21,7 +23,7 @@ def weighted_std(values: np.ndarray, weights: np.ndarray) -> tuple:
 
 def _calculate_statistics(
     diffmap_np: np.ndarray, map_dark_np: np.ndarray, mask_np: np.ndarray
-):
+) -> dict:
     """
     Extracts voxel values for masked and unmasked regions and calculates
     basic weights and divisions.
@@ -44,7 +46,7 @@ def _calculate_statistics(
 
 def _analyze_threshold_trends(
     diffmap_vals: np.ndarray, pseudo_occupancy: np.ndarray, weights: np.ndarray
-):
+) -> dict:
     """
     Iterates through intensity thresholds to calculate running means and standard deviations.
     """
@@ -92,7 +94,7 @@ def _analyze_threshold_trends(
     }
 
 
-def _create_plot(stats, trend, plot_config, general_config):
+def _create_plot(stats: dict, trend: dict, plot_config: dict, general_config: dict) -> tuple[Figure, Axes]:
     """
     Handles all matplotlib logic.
     """
@@ -181,7 +183,7 @@ def plot_extrapolation_estimate(
     map_dark: rsmap.Map,
     inclusion_mask: np.ndarray,
     config: dict,
-):
+) -> tuple[Figure, Axes]:
     general_config = config["general"]
 
     diffmap_np = diffmap.to_3d_numpy_map(map_sampling=general_config["map_sampling"])
