@@ -94,12 +94,21 @@ def _analyze_threshold_trends(
     }
 
 
-def _create_plot(stats: dict, trend: dict, plot_config: dict, general_config: dict) -> tuple[Figure, Axes]:
+def _create_plot(
+    stats: dict,
+    trend: dict,
+    plot_config: dict,
+    general_config: dict,
+    ax: Axes | None = None,
+) -> tuple[Figure, Axes]:
     """
     Handles all matplotlib logic.
     """
-    fig, ax = plt.subplots(1, 1, figsize=(12, 6), tight_layout=True)
-    fig.suptitle(general_config["name_human"])
+    if ax is None:
+        fig, ax = plt.subplots(1, 1, figsize=(6, 6), tight_layout=True)
+    else:
+        fig = None
+    # ax.set_title(general_config["name_human"])
 
     # Unpack data
     means = trend["mean"]
@@ -117,7 +126,7 @@ def _create_plot(stats: dict, trend: dict, plot_config: dict, general_config: di
         (means + stds),
         color="gray",
         alpha=0.5,
-        label="Weighted mean ± std",
+        label="Standard Deviation",
     )
 
     # Fill between stability
@@ -127,7 +136,7 @@ def _create_plot(stats: dict, trend: dict, plot_config: dict, general_config: di
         (means - stds - stability),
         color="green",
         alpha=0.5,
-        label="Weighted mean ± std ± general stability",
+        label="Numerical instability",
     )
     ax.fill_betweenx(
         threshs,
@@ -183,6 +192,7 @@ def plot_extrapolation_estimate(
     map_dark: rsmap.Map,
     inclusion_mask: np.ndarray,
     config: dict,
+    ax: Axes | None = None,
 ) -> tuple[Figure, Axes]:
     general_config = config["general"]
 
@@ -199,4 +209,4 @@ def plot_extrapolation_estimate(
     )
 
     # 5. Visualization
-    return _create_plot(stats_data, trend_data, config["plot"], general_config)
+    return _create_plot(stats_data, trend_data, config["plot"], general_config, ax)
