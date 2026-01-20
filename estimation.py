@@ -118,6 +118,19 @@ def _create_plot(
 
     # 1. Plot Trends (Mean + Error Bands)
     ax.plot(means, threshs, label="Weighted mean", color="blue")
+    min_uncertainty_idx = np.argmin(stds+stability)
+    optimal_uncertainty = [
+        means[min_uncertainty_idx]-stds[min_uncertainty_idx],
+        means[min_uncertainty_idx]+stds[min_uncertainty_idx],
+    ]
+    # print(f"Optimal occupancy estimate at threshold {threshs[min_uncertainty_idx]:.3f}: ")
+    ax.plot(
+        optimal_uncertainty,
+        [threshs[min_uncertainty_idx],]*2,
+        marker="|",
+        color="blue",
+        label=f"Prediction: {means[min_uncertainty_idx]:.3f} ± {stds[min_uncertainty_idx]:.3f}",
+    )
 
     # Fill between std
     ax.fill_betweenx(

@@ -27,6 +27,9 @@ def find_folder(folder_cond):
     elif folder_cond["noise_type"] == "pseudo_poisson":
         noise_dark = "snr"
         noise_folder = ""
+    elif folder_cond["noise_type"] == "gaussian_flat":
+        noise_dark = "gaussian_flat"
+        noise_folder = "flat_"
     else:
         raise ValueError
 
@@ -296,6 +299,14 @@ def replot_xtrapol8(data, axes=None):
     ax.scatter(
         occupancies[mask],
         all_features[mask],
+        s=200,
+        facecolor="none",
+        color="brown",
+    )
+    mask = np.isclose(occupancies, occ_CC)
+    ax.scatter(
+        occupancies[mask],
+        np.array(pearsonCC)[mask],
         s=200,
         facecolor="none",
         color="brown",
