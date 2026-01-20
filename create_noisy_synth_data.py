@@ -11,7 +11,7 @@ def apply_noise_poisson(map_pdb: rsmap.Map, snr_factor: float) -> rsmap.Map:
     dhkl = map_pdb.compute_dHKL()
     mask = np.logical_and(dhkl < 2.1, dhkl >= 1.9)
 
-    F_2angstrom = np.mean(map_pdb["F"][mask])  # type : ignore
+    F_2angstrom = float(np.mean(map_pdb["F"][mask]))
     sigI = map_pdb["F"] * F_2angstrom / snr_factor
     noisy_I = map_pdb["F"] ** 2 + sigI * np.random.normal(0, 1, map_pdb["F"].shape)
 
@@ -24,78 +24,81 @@ def apply_noise_poisson(map_pdb: rsmap.Map, snr_factor: float) -> rsmap.Map:
     return map_pdb[map_pdb["F"] > 1]
 
 
-def apply_noise_gaussian(map_pdb, snr_factor):
+def apply_noise_gaussian(map_pdb: rsmap.Map, snr_factor: float) -> rsmap.Map:
     sigF = map_pdb["F"] / snr_factor
     noisy_F = map_pdb["F"] + sigF * np.random.normal(0, 1, map_pdb["F"].shape)
-    mask_one = None
-    # mask_one = np.ones(len(map_pdb))
-    if mask_one is None:
-        map_pdb["F"] = noisy_F
-    else:
-        map_pdb.loc[mask_one, "F"] = noisy_F[mask_one]
+    map_pdb["F"] = noisy_F
 
-    # map_pdb["PHI"] += (1 - np.sign(noisy_F)) * 90
-    # map_pdb["PHI"] = map_pdb["PHI"] % 360
-    map_pdb.set_uncertainties(np.sqrt(sigF))
+    map_pdb["PHI"] += (1 - np.sign(noisy_F)) * 90
+    map_pdb["PHI"] = map_pdb["PHI"] % 360
+    map_pdb.set_uncertainties((sigF))  # type: ignore
 
     mask = np.logical_and(True, map_pdb["F"] > 1)
     return map_pdb[mask]
 
 
-def pdb2noisy_mtz(pdbloc, high_resolution_limit=1.5, snr_factor=10, save2file=False):
-    file_loc = synthloc + "100ps_noise3.mtz"
-    ds_temp = rs.read_mtz(file_loc)
+def apply_noise_gaussian_snr_floor(
+    map_pdb: rsmap.Map,
+    snr_factor: float,
+    floor_range: tuple[float, float],
+    floor_snr: float,
+) -> rsmap.Map:
+    def rand():
+        return np.random.normal(0, 1, map_pdb["F"].shape)
+    dhkl = map_pdb.compute_dHKL()
+    mask = np.logical_and((dhkl >= floor_range[0]), (dhkl <= floor_range[1]))
+    if mask.sum() == 0:
+        raise ValueError("No reflections found in the specified floor range.")
+    sigF_floor = float(np.mean(map_pdb["F"][mask])) / floor_snr
+
+    sigF_gaussian = map_pdb["F"] / snr_factor
+    noisy_F = map_pdb["F"] + sigF_gaussian * rand() + sigF_floor * rand()
+    map_pdb["F"] = noisy_F
+
+    map_pdb["PHI"] += (1 - np.sign(noisy_F)) * 90
+    map_pdb["PHI"] = map_pdb["PHI"] % 360
+    map_pdb.set_uncertainties(np.sqrt(sigF_gaussian**2+sigF_floor**2))  # type: ignore
+
+    mask = np.logical_and(True, map_pdb["F"] > 1)
+    return map_pdb[mask]
+
+def pdb2noisy(pdbloc, noise_type, high_resolution_limit=1.5, snr_factor=10, save2file=False):
     struc = gemmi.read_pdb(pdbloc)
     map_pdb = gemmi_structure_to_calculated_map(
         struc, high_resolution_limit=high_resolution_limit
     )
-    map_noisy = apply_noise_poisson(map_pdb.copy(), snr_factor)
-    print(f"Zero frequency: {map_noisy.loc[(0,0,0), 'F']:.1f}")
-    map_noisy = map_noisy.drop((0, 0, 0))
-    print(map_noisy)
-    output_mtz = pdbloc.replace(
-        ".pdb", f"_snr_{snr_factor}_dmin_{high_resolution_limit*10:.0f}.mtz"
+    match noise_type:
+        case "poisson":
+            map_noisy = apply_noise_poisson(map_pdb.copy(), snr_factor)
+            noise_name = "snr"
+        case "gaussian":
+            map_noisy = apply_noise_gaussian(map_pdb.copy(), snr_factor)
+            noise_name = "gaussian"
+        case "gaussian_flat":
+            floor_range = (1.55, 1.65)
+            floor_snr = 1.0
+            map_noisy = apply_noise_gaussian_snr_floor(map_pdb.copy(), snr_factor, floor_range, floor_snr)
+            noise_name = "gaussian_flat"
+        case _:
+            raise ValueError(f"Unknown noise type: {noise_type}")
+
+    map_noisy = map_noisy.drop((0, 0, 0)) # type: ignore
+
+    output_mtz_path = pdbloc.replace(
+        ".pdb", f"_{noise_name}_{snr_factor}_dmin_{high_resolution_limit*10:.0f}.mtz"
     )
-    print("saved to ", output_mtz)
-    ds_temp["F_on"] = map_noisy["F"]
-    # ds_temp["PHIC"] = map_noisy["PHI"]
-    ds_temp["SIGF_on"] = map_noisy["SIGF"]
-    # ds_temp.drop(columns=["F_k", "PHI_k", "SIGF_k"], inplace=True, errors='ignore')
-    ds_temp.drop(columns=["SIGFC"], inplace=True, errors="ignore")
-    print(ds_temp.columns)
+        
+    ds_noisy = rs.DataSet(map_noisy)
+    ds_noisy.drop(columns=["PHI"], inplace=True, errors="ignore")
     if save2file:
-        ds_temp.write_mtz(output_mtz)
+        ds_noisy.write_mtz(output_mtz_path)
+        print("saved to ", output_mtz_path)
     else:
         print("Test run - not saving file")
 
 
-def pdb2noisy_gaussian(
-    pdbloc, high_resolution_limit=1.5, snr_factor=10, save2file=False, synthloc=""
-):
-    synthloc = synthloc if synthloc else load_homepath() + "synthetic_cistrans/"
-    file_loc = synthloc + "100ps_noise3.mtz"
-    ds_temp = rs.read_mtz(file_loc)
-    struc = gemmi.read_pdb(pdbloc)
-    map_pdb = gemmi_structure_to_calculated_map(
-        struc, high_resolution_limit=high_resolution_limit
-    )
 
-    map_noisy = apply_noise_gaussian(map_pdb.copy(), snr_factor)
-    map_noisy = map_noisy.drop((0, 0, 0))
-    output_mtz = pdbloc.replace(
-        ".pdb", f"_gaussian_{snr_factor}_dmin_{high_resolution_limit*10:.0f}.mtz"
-    )
 
-    ds_temp["F_on"] = map_noisy["F"]
-    ds_temp["SIGF_on"] = map_noisy["SIGF"]
-    ds_temp.drop(columns=["SIGFC"], inplace=True, errors="ignore")
-
-    print(ds_temp.columns)
-    print("saving ", output_mtz)
-    if save2file:
-        ds_temp.write_mtz(output_mtz)
-    else:
-        print("Test run - not saving file")
 
 
 def make_clean_maps(
@@ -125,6 +128,10 @@ def apply_noise_to_maps(
     if snr_factor:
         if noise_type == "half":
             map_light = apply_noise_gaussian(map_light, snr_factor)
+        elif noise_type == "floor":
+            floor_range = (1.45, 1.55)
+            floor_snr = 1.0
+            map_light = apply_noise_gaussian_snr_floor(map_light, snr_factor, floor_range, floor_snr)
         elif noise_type == "gaussian":
             map_dark = apply_noise_gaussian(map_dark, snr_factor)
             map_light = apply_noise_gaussian(map_light, snr_factor)
