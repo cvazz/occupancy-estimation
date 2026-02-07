@@ -34,6 +34,7 @@ def _calculate_statistics(
     weight = np.abs(diffmap_np[mask_np])
 
     diffmap_sigma = (diffmap_np - np.mean(diffmap_np)) / np.std(diffmap_np)
+    diffmap_sigma = diffmap_np 
 
     return {
         "diffmap_masked": diffmap_sigma[mask_np],
@@ -57,9 +58,12 @@ def _analyze_threshold_trends(
     # Note: original code negated diffmap values for the threshold loop: `diffmap_mk = -diffmap_np[mask_np]`
     diffmap_mk = -diffmap_vals
 
-    threshold = np.linspace(np.min(diffmap_mk), np.max(diffmap_mk), num=50)
+    threshold = np.linspace(np.min(diffmap_mk), np.max(diffmap_mk)*.9, num=50)
     means, stds = [], []
     stability = []
+    weight = []
+    bootstrap_std = []
+    bootstrap_mean = []
 
     prefactor = reweight(np.max(weights)) * (pseudo_occupancy[np.argmax(weights)])
 
@@ -75,6 +79,9 @@ def _analyze_threshold_trends(
             means.append(np.nan)
             stds.append(np.nan)
             stability.append(np.nan)
+            bootstrap_std.append(np.nan)
+            bootstrap_mean.append(np.nan)
+            weight.append(np.nan)
             continue
 
         div_mean, div_std = weighted_std(current_div, current_weight)
@@ -85,12 +92,21 @@ def _analyze_threshold_trends(
         means.append(div_mean)
         stds.append(div_std)
         stability.append(general_uncertainty)
+        random_sample = np.random.choice(current_div, size=1000)
+        bs_std = np.std(random_sample)
+        bootstrap_std.append(bs_std)
+        bs_mean = np.mean(random_sample)
+        bootstrap_mean.append(bs_mean)
+        weight.append(sum_weight)
 
     return {
         "threshold": threshold,
         "mean": np.array(means),
         "std": np.array(stds),
         "stability": np.array(stability),
+        "bootstrap_std": np.array(bootstrap_std),
+        "bootstrap_mean": np.array(bootstrap_mean),
+        "weight": np.array(weight),
     }
 
 
