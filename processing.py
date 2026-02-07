@@ -195,13 +195,19 @@ def combined_diffmap_calc(
 
 def autoshift_rsmap(
     map_in: rsmap.Map,
-    map_dark_comp: rsmap.Map,
-    config: dict,
+    general_config: dict,
+    map_dark_comp: rsmap.Map | None = None,
     ignore_mask: np.ndarray | bool = False,
     diagnostic_plots: bool = False,
 ) -> tuple[rsmap.Map, float]:
-    map_sampling = config["map_sampling"]
-    pdbloc_dark = config["pdbloc_dark"]
+    map_sampling = general_config["map_sampling"]
+    pdbloc_dark = general_config["pdbloc_dark"]
+
+    if map_dark_comp is None:
+        struc = gemmi.read_pdb(pdbloc_dark)
+        map_dark_comp = gemmi_structure_to_calculated_map(
+            struc, high_resolution_limit=general_config["high_resolution_limit"]
+        )
 
     rsmap_np = map_in.to_3d_numpy_map(map_sampling=map_sampling)
     map_dark_comp_np = map_dark_comp.to_3d_numpy_map(map_sampling=map_sampling)
@@ -271,13 +277,11 @@ def prepare_maps(
         )
 
         map_dark, zero_freq_dark = autoshift_rsmap(
-            map_dark,
-            map_dark_comp,
-            config["general"],
+            map_dark, config["general"], map_dark_comp
         )
         logger.info("calculating autoshift for triggered map... with extra mask")
         map_triggered, zero_freq_triggered = autoshift_rsmap(
-            map_triggered, map_dark_comp, config["general"], diffmap_larger
+            map_triggered, config["general"], map_dark_comp, diffmap_larger
         )
         logger.info("calculating autoshift for triggered map... done")
 
@@ -294,7 +298,10 @@ def prepare_maps(
             diffmap = diffmap_temp  # type: ignore
         else:
             raise ValueError("Diffmap not defined")
-    logger.info(f"Diffmap zero frequency: {diffmap.loc[(0,0,0)]['F']}") # type: ignore
+    try:
+        logger.info(f"Diffmap zero frequency: {diffmap.loc[(0,0,0)]['F']}")  # type: ignore
+    except KeyError:
+        logger.info("Diffmap zero frequency was not set")
     if config["map_processing"]["diffmap_mean_correction"]:
         if config["map_processing"]["dark_mean_correction"]:
             zero_freq_diff = zero_freq_triggered - zero_freq_dark  # type: ignore
