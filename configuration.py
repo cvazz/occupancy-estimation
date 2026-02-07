@@ -43,11 +43,11 @@ def get_file_config(
             "blocking_radius": 1.5,
             "blocking_percentile": 95,
             "exclude_solvent": True,
-            "exclude_negative_dark": True,
+            "dark_size_threshold": 1.,
             "exclude_large_occupancy_outliers": False,
         },
         "map_processing": {
-            "diffmap_type": "tv",
+            "diffmap_type": "tv", # "kweighted", "tv", or "vanilla"
             "dark_mean_correction": True,
             "diffmap_mean_correction": True,
             "diffmap_v2_correction": False,

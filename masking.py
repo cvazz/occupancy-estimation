@@ -151,9 +151,9 @@ def minimum_blob_size(
     logger.info(f"Maximum Blob sizes found: {np.max(counts[1:])}")
 
     if np.max(counts[1:]) < min_count:
-        raise ValueError(
-            "No blobs found with the given minimum size. Please decrease 'min_blob_size' or 'sigma'."
-        )
+        error_message = ""
+        error_message += f"No blobs found with size > {min_blob_size} A^3. Please decrease 'min_blob_size' or 'sigma'."
+        raise ValueError( error_message)
     mask_np = np.zeros(all_neg_blobs.shape, dtype=bool)
     for uu in uniq[counts > min_count]:
         if uu == 0:
@@ -242,6 +242,7 @@ def make_inclusion_mask(diffmap: rsmap.Map, map_dark: rsmap.Map, config: dict):
     parameters = config["masking"]
     map_sampling = config["general"].get("map_sampling", 3)
     pdbloc_dark = config["input_files"].get("pdb_dark", None)
+    dark_size_std_threshold = parameters.get("dark_size_threshold", 1)
     diffmap_np = diffmap.to_3d_numpy_map(map_sampling=map_sampling)
 
     ### Find all negative blobs ###
@@ -272,12 +273,15 @@ def make_inclusion_mask(diffmap: rsmap.Map, map_dark: rsmap.Map, config: dict):
         log_text += " (activate via 'exclude_solvent' parameter)"
         logger.info(log_text)
 
-    if parameters.get("exclude_negative_dark", True):
+    if dark_size_std_threshold:
         mask_total_before = np.sum(mask_np)
         map_dark_np = map_dark.to_3d_numpy_map(map_sampling=map_sampling)
-        mask_np = np.logical_and(mask_np, map_dark_np > 0)
+        map_dark_threshold = map_dark_np.mean()+dark_size_std_threshold*map_dark_np.std()
+        mask_np = np.logical_and(mask_np, map_dark_np > map_dark_threshold)
         number_negative_darks = mask_total_before - np.sum(mask_np)
-        log_text = f"Excluding an addtional {number_negative_darks} voxels from mask due to negative dark map values"
+        log_text = ""
+        log_text += f"Excluding an addtional {number_negative_darks} voxels from mask due" 
+        log_text += f"dark map smaller than mean + {dark_size_std_threshold} * sigma"
         log_text += " (deactivate via 'exclude_negative_dark' parameter)"
         if number_negative_darks:
             logger.warning(log_text)
