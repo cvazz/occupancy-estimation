@@ -65,6 +65,7 @@ def get_fits2(neg_sum, alpha_invs, n_largest, return_all=False):
     intersection = (res_biggest.intercept - res_lowest.intercept) / (
         res_lowest.slope - res_biggest.slope
     )
+    intersection_y = res_biggest.intercept + res_biggest.slope * intersection
     highest_low = np.max(alpha_invs[m_lowest])
     lowest_high = np.min(alpha_invs[m_biggest])
     if intersection > lowest_high or intersection < highest_low:
@@ -96,7 +97,7 @@ def get_fits2(neg_sum, alpha_invs, n_largest, return_all=False):
         logger.warning(f"Fits are (close to) parallel: {intersection:.1f} )")
         intersection = np.nan
 
-    return fit_lowest, fit_biggest, intersection
+    return fit_lowest, fit_biggest, intersection, intersection_y
 
 
 def _calculate_negative_density_trends(diffmap_np, map_dark_np, mask_np, xtr_range):
@@ -137,16 +138,25 @@ def plot_negative_density_trends(neg_density_plot, neg_density_fit, ax=None):
         fig = None
     ax.plot(xtr_range_plot, -neg_dens_plot, "x")
 
-    fit_lowest2, fit_biggest2, intersect = get_fits2(
+    fit_lowest2, fit_biggest2, intersect, intersect_y = get_fits2(
         -neg_dens_fit, xtr_range_fit, 3, return_all=True
     )
-    ax.plot(xtr_range_fit, fit_lowest2, "-", color="red")
+    ax.plot(xtr_range_fit, fit_lowest2, "--", color="gray")
     ax.plot(
         xtr_range_fit,
         fit_biggest2,
-        "-",
-        color="red",
+        "--",
+        color="gray",
         label=f"Fits (Intersect at {intersect:.2f} i.e. {1/intersect:.2f})",
+    )
+    print()
+    ax.scatter(
+        intersect,
+        intersect_y,
+        s=200,
+        facecolor="none",
+        color="brown",
+        label=f"Intersection at {intersect:.2f} (i.e. {1/intersect:.2f})",
     )
     ax.legend(loc="upper right")
     ax.set_xlabel("Extrapolation factor")
@@ -229,9 +239,20 @@ def plot_pandda_results(pandda_dict, alpha=None, axs=None):
     ax = axs[0]
     if alpha is not None:
         ax.axvline(alpha, c="k", linestyle="-.", label="alpha_true")
-    ax.plot(pseudo_occupancy, +mean_global - mean_local, label="global-local")
-    pk_val_narrow = pseudo_occupancy[np.argmax(mean_global - mean_local)]
-    ax.axvline(pk_val_narrow, color="green", label=f"Peak at {pk_val_narrow:.2f}")
+    mean_diff = mean_global - mean_local
+    ax.plot(pseudo_occupancy, +mean_diff, label="global-local")
+    pk_val_idx = np.argmax(mean_diff)
+    pk_val_narrow = pseudo_occupancy[pk_val_idx]
+    # pseudo_occ = np.argwhere(pseudo_occupancy == pk_val_narrow)[0]
+    ax.scatter(
+        pseudo_occupancy[pk_val_idx],
+        mean_diff[pk_val_idx],
+        s=200,
+        facecolor="none",
+        color="brown",
+        label=f"Peak at {pk_val_narrow:.2f}",
+    )
+    # ax.axvline(pseudo_occupancy[pk_val_idx], color="green", label=f"Peak at {pk_val_narrow:.2f}")
     ax.legend()
     ax.set_title("PanDDA method")
     ax = axs[1]

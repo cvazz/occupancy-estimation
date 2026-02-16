@@ -145,7 +145,15 @@ def _create_plot(
         [threshs[min_uncertainty_idx],]*2,
         marker="|",
         color="blue",
-        label=f"Prediction: {means[min_uncertainty_idx]:.3f} ± {stds[min_uncertainty_idx]:.3f}",
+        label=f"Prediction: {means[min_uncertainty_idx]:.3f} \nUncertainty: {stds[min_uncertainty_idx]:.3f} ({stds[min_uncertainty_idx]/means[min_uncertainty_idx]:.1%})",
+    )
+    ax.scatter(
+        means[min_uncertainty_idx],
+        threshs[min_uncertainty_idx],
+        s=200,
+        facecolor="none",
+        color="brown",
+        # label=f"Optimal threshold: {threshs[min_uncertainty_idx]:.3f}",
     )
 
     # Fill between std
@@ -181,27 +189,28 @@ def _create_plot(
     ax.plot(
         stats["pseudo_occupancy"],
         -stats["diffmap_masked"],
-        label="voxels to include",
+        label="included voxels",
         marker=marker,
         linestyle="",
         alpha=0.5,
     )
+    
 
     if plot_config["show_ignored_voxels"]:
         ax.plot(
             stats["pseudo_occupancy_inv"],
             -stats["diffmap_inv"],
-            marker=marker,
+            marker=".",
             linestyle="",
-            label="voxels to ignore",
+            label="excluded voxels",
             alpha=0.3,
         )
 
     # 4. Formatting
     ax.legend(loc="upper right")
     ax.set_yscale("linear")
-    ax.set_xlabel("Implied occupancy factor")
-    ax.set_ylabel("Difference Map voxel values")
+    ax.set_xlabel("Implied occupancy "+r"$ \chi^{-1} = -\Delta\rho/\rho_{0}$")
+    ax.set_ylabel("Difference Map " + r"$-\Delta \rho$" )
 
     # Determine X-limits safely ignoring NaNs
     valid_means = means[~np.isnan(means)]
