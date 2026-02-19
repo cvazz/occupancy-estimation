@@ -42,8 +42,8 @@ def _calculate_statistics(
         "weight": weight,
         "diffmap_inv": diffmap_sigma[~mask_np],
         "pseudo_occupancy_inv": pseudo_occupancy[~mask_np],
-    }
 
+    }
 
 def _analyze_threshold_trends(
     diffmap_vals: np.ndarray, pseudo_occupancy: np.ndarray, weights: np.ndarray
@@ -110,7 +110,7 @@ def _analyze_threshold_trends(
     }
 
 
-def _create_plot(
+def _create_plot_v2(
     stats: dict,
     trend: dict,
     plot_config: dict,
@@ -121,7 +121,7 @@ def _create_plot(
     Handles all matplotlib logic.
     """
     if ax is None:
-        fig, ax = plt.subplots(1, 1, figsize=(6, 6), tight_layout=True)
+        fig, ax = plt.subplots(1, 1, figsize=(9, 6), tight_layout=True)
     else:
         fig = None
     # ax.set_title(general_config["name_human"])
@@ -133,7 +133,122 @@ def _create_plot(
     threshs = trend["threshold"]
 
     # 1. Plot Trends (Mean + Error Bands)
-    ax.plot(means, threshs, label="Weighted mean", color="blue")
+    ax.plot(-threshs,means, label="Weighted mean", color="blue")
+    min_uncertainty_idx = np.argmin(stds+stability)
+    optimal_uncertainty = [
+        -(means[min_uncertainty_idx]-stds[min_uncertainty_idx]),
+        means[min_uncertainty_idx]+stds[min_uncertainty_idx],
+    ]
+    # print(f"Optimal occupancy estimate at threshold {threshs[min_uncertainty_idx]:.3f}: ")
+    # ax.plot(
+    #     [-threshs[min_uncertainty_idx],]*2,
+    #     optimal_uncertainty,
+    #     marker="|",
+    #     color="blue",
+    #     label=f"Prediction: {means[min_uncertainty_idx]:.3f} \nUncertainty: {stds[min_uncertainty_idx]:.3f} ({stds[min_uncertainty_idx]/means[min_uncertainty_idx]:.1%})",
+    # )
+    ax.scatter(
+        -threshs[min_uncertainty_idx],
+        means[min_uncertainty_idx],
+        s=200,
+        facecolor="none",
+        color="brown",
+        # label=f"Optimal threshold: {threshs[min_uncertainty_idx]:.3f}",
+    )
+
+    # Fill between std
+    ax.fill_between(
+        -threshs,
+        (means - stds),
+        (means + stds),
+        color="gray",
+        alpha=0.5,
+        label="Standard Deviation",
+    )
+
+    # Fill between stability
+    ax.fill_between(
+        -threshs,
+        (means - stds),
+        (means - stds - stability),
+        color="green",
+        alpha=0.5,
+        label="Numerical instability",
+    )
+    ax.fill_between(
+        -threshs,
+        (means + stds),
+        (means + stds + stability),
+        color="green",
+        alpha=0.5,
+    )
+
+    # 2. Plot Voxel Scatter
+    marker = "."
+    # Note: X-axis is pseudo_occupancy (Occupancy), Y-axis is -DifferenceMap
+    ax.plot(
+        stats["diffmap_masked"],
+        stats["pseudo_occupancy"],
+        label="included voxels",
+        marker=marker,
+        linestyle="",
+        alpha=0.5,
+    )
+    
+
+    if plot_config["show_ignored_voxels"]:
+        ax.plot(
+            stats["diffmap_inv"],
+            stats["pseudo_occupancy_inv"],
+            marker=".",
+            linestyle="",
+            label="excluded voxels",
+            alpha=0.3,
+        )
+
+    # 4. Formatting
+    ax.legend(loc="upper right")
+    ax.set_xscale("linear")
+    ax.set_ylabel("Implied occupancy "+r"$ \chi^{-1} = -\Delta\rho/\rho_{0}$")
+    ax.set_xlabel("Difference Map " + r"$-\Delta \rho$" )
+
+    # Determine X-limits safely ignoring NaNs
+    valid_means = means[~np.isnan(means)]
+    valid_stds = stds[~np.isnan(stds)]
+    if len(valid_means) > 0:
+        max_y = np.max(valid_means + valid_stds) * 1.1
+        ax.set_ylim(0, max_y)
+
+    ax.set_xlim(None,0, )
+    ax.grid()
+
+    return fig, ax
+
+def _create_plot(
+    stats: dict,
+    trend: dict,
+    plot_config: dict,
+    general_config: dict,
+    ax: Axes | None = None,
+) -> tuple[Figure, Axes]:
+    """
+    Handles all matplotlib logic.
+    """
+    if ax is None:
+        fig, ax = plt.subplots(1, 1, figsize=(9, 6), tight_layout=True)
+    else:
+        fig = None
+    # ax.set_title(general_config["name_human"])
+
+    # Unpack data
+    means = trend["mean"]
+    stds = trend["std"]
+    stability = trend["stability"]
+    threshs = trend["threshold"]
+
+    # 1. Plot Trends (Mean + Error Bands)
+    ax.plot(threshs, means, label="Weighted mean", color="blue")
+
     min_uncertainty_idx = np.argmin(stds+stability)
     optimal_uncertainty = [
         means[min_uncertainty_idx]-stds[min_uncertainty_idx],
@@ -141,8 +256,8 @@ def _create_plot(
     ]
     # print(f"Optimal occupancy estimate at threshold {threshs[min_uncertainty_idx]:.3f}: ")
     ax.plot(
-        optimal_uncertainty,
         [threshs[min_uncertainty_idx],]*2,
+        optimal_uncertainty,
         marker="|",
         color="blue",
         label=f"Prediction: {means[min_uncertainty_idx]:.3f} \nUncertainty: {stds[min_uncertainty_idx]:.3f} ({stds[min_uncertainty_idx]/means[min_uncertainty_idx]:.1%})",
@@ -247,4 +362,28 @@ def plot_extrapolation_estimate(
     )
 
     # 5. Visualization
-    return _create_plot(stats_data, trend_data, config["plot"], general_config, ax)
+    return _create_plot_v2(stats_data, trend_data, config["plot"], general_config, ax)
+
+def plot_extrapolation_estimate_v2(
+    diffmap: rsmap.Map,
+    map_dark: rsmap.Map,
+    inclusion_mask: np.ndarray,
+    config: dict,
+    ax: Axes | None = None,
+) -> tuple[Figure, Axes]:
+    general_config = config["general"]
+
+    diffmap_np = diffmap.to_3d_numpy_map(map_sampling=general_config["map_sampling"])
+    map_dark_np = map_dark.to_3d_numpy_map(map_sampling=general_config["map_sampling"])
+    logger.warning(
+        f"Mean of diffmap_np: {np.mean(diffmap_np)}, Mean of map_dark_np: {np.mean(map_dark_np)}"
+    )
+    stats_data = _calculate_statistics(diffmap_np, map_dark_np, inclusion_mask)
+    trend_data = _analyze_threshold_trends(
+        stats_data["diffmap_masked"],
+        stats_data["pseudo_occupancy"],
+        stats_data["weight"],
+    )
+
+    # 5. Visualization
+    return _create_plot_v2(stats_data, trend_data, config["plot"], general_config, ax)
