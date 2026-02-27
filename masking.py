@@ -286,6 +286,9 @@ def make_inclusion_mask(diffmap: rsmap.Map, map_dark: rsmap.Map, config: dict):
         if number_negative_darks:
             logger.warning(log_text)
 
+    if parameters.get('exclude_positive_diffmap', True):
+        mask_np = np.logical_and(mask_np, diffmap_np < 0)
+
     if parameters.get("exclude_large_occupancy_outliers", False):
         map_dark_np = map_dark.to_3d_numpy_map(map_sampling=map_sampling)
         mask_np_before = np.sum(mask_np)
