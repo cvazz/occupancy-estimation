@@ -153,7 +153,7 @@ def _create_plot_v2(
         s=200,
         facecolor="none",
         color="brown",
-        # label=f"Optimal threshold: {threshs[min_uncertainty_idx]:.3f}",
+        label=f"Optimal threshold: {means[min_uncertainty_idx]:.3f}",
     )
 
     # Fill between std
@@ -268,7 +268,7 @@ def _create_plot(
         s=200,
         facecolor="none",
         color="brown",
-        # label=f"Optimal threshold: {threshs[min_uncertainty_idx]:.3f}",
+        label=f"Optimal threshold: {means[min_uncertainty_idx]:.3f}",
     )
 
     # Fill between std
@@ -384,6 +384,7 @@ def plot_extrapolation_estimate_v2(
         stats_data["pseudo_occupancy"],
         stats_data["weight"],
     )
+    fig, ax = _create_plot_v2(stats_data, trend_data, config["plot"], general_config, ax)
+    return fig, ax
 
     # 5. Visualization
-    return _create_plot_v2(stats_data, trend_data, config["plot"], general_config, ax)
