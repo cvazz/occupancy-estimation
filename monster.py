@@ -43,7 +43,7 @@ def apply_config_rsEGFP2() -> dict:
     )
 
 
-def apply_config() -> dict:
+def apply_config(add_light = False) -> dict:
     homepath = load_homepath()
     folderloc = homepath + "data/photolyase/"
     dataloc_dark = folderloc + "1_superdark/superdark_deposit.mtz"
@@ -74,8 +74,7 @@ def apply_config() -> dict:
         amplitude_column="F", uncertainty_column="SIGF", phase_column="PHIF-model"
     )
     print(dataloc_light)
-
-    return get_file_config(
+    config = get_file_config(
         dataloc_dark=dataloc_dark,
         dataloc_light=dataloc_light,
         pdbloc_dark=pdbloc_dark,
@@ -84,6 +83,9 @@ def apply_config() -> dict:
         high_resolution_limit=high_resolution_limit,
         name_machine=name_machine,
     )
+    if add_light:
+        config["input_files"]["pdbloc_triggered"] = config["input_files"]["map_triggered"][:-4] + ".pdb"
+    return config
 
 
 def main() -> None:
