@@ -2,6 +2,7 @@ import numpy as np
 import gemmi
 import reciprocalspaceship as rs
 import matplotlib.pyplot as plt
+from scipy.optimize import minimize_scalar
 
 
 import pickle
@@ -11,6 +12,7 @@ from meteor import compute_meteor_difference_map
 from meteor import rsmap
 from meteor.utils import cut_resolution
 from meteor.scale import scale_maps
+from meteor.scale import compute_scale_factors
 from meteor.sfcalc import gemmi_structure_to_calculated_map
 from meteor.diffmaps import compute_difference_map
 from meteor.scripts.common import (
@@ -193,7 +195,7 @@ def combined_diffmap_calc(
     return diffmap
 
 
-def autoshift_rsmap(
+def autoshift_rsmap_old(
     map_in: rsmap.Map,
     general_config: dict,
     map_dark_comp: rsmap.Map | None = None,
@@ -223,7 +225,7 @@ def autoshift_rsmap(
     shifts = map_dark_comp_np[include_mask] - rsmap_np[include_mask]
     if diagnostic_plots:
         plt.figure()
-        plt.plot(map_dark_comp_np[include_mask], shifts)
+        plt.plot(map_dark_comp_np[include_mask], shifts, ".", alpha=0.5)
         plt.show()
     mean_shift = np.mean(shifts)
 
@@ -244,6 +246,203 @@ def autoshift_rsmap(
     return map_in, zero_freq
 
 
+# ==========================================
+# HELPER FUNCTIONS
+# ==========================================
+
+def generate_masks(pdb_file: str, grid_shape: tuple, cell: gemmi.UnitCell, spacegroup: gemmi.SpaceGroup):
+    """
+    Generates binary masks for the protein and the bulk solvent using gemmi.
+    Returns:
+        protein_mask (bool array): True inside the macromolecule.
+        solvent_mask (float32 array): 1.0 in the solvent, 0.0 inside the protein.
+    """
+    st = gemmi.read_structure(pdb_file)
+    st.setup_entities()
+    model = st[0]
+    # model.remove_waters()
+
+    mask_grid = gemmi.Int8Grid()
+    mask_grid.set_unit_cell(cell)
+    mask_grid.spacegroup = spacegroup
+    
+    nx, ny, nz = map(int, grid_shape)
+    mask_grid.set_size(nx, ny, nz)
+    
+    masker = gemmi.SolventMasker(gemmi.AtomicRadiiSet.VanDerWaals)
+    masker.rprobe = 1.4
+    masker.put_mask_on_int8_grid(mask_grid, model)
+    
+    # Gemmi returns 1 for protein, 0 for solvent.
+    protein_mask = ~np.array(mask_grid, copy=False).astype(bool)
+    
+    # Invert for the solvent mask (1.0 in solvent)
+    solvent_mask = (~protein_mask).astype(np.float32) 
+    
+    return protein_mask, solvent_mask
+
+
+def error_metric_for_scaling(map_temp: rsmap.Map, map_exp: rsmap.Map, dmin: float = 3.0):
+    """
+    Calculates the mean absolute error between the scaled model and 
+    experimental amplitudes at low resolution (where bulk solvent is active).
+    """
+    d_spacings = map_temp.compute_dHKL()
+    low_res_idx = d_spacings > dmin
+    
+    f_model = map_temp.amplitudes[low_res_idx]
+    f_obs = map_exp.amplitudes[low_res_idx]
+    
+    # Calculate optimal scaling using meteor's internal function
+    f_model_scaled = compute_scale_factors(reference_values=f_obs, values_to_scale=f_model)
+    
+    # Compute Mean Absolute Error
+    absdiff = np.abs(f_obs - f_model_scaled)
+    return np.mean(absdiff)
+
+# ==========================================
+# CORE CALCULATION FUNCTIONS
+# ==========================================
+
+def calculate_rho_atom(map_exp_np: np.ndarray, map_model_np: np.ndarray, protein_mask: np.ndarray):
+    """
+    Calculates the mean density difference strictly within the protein region.
+    This effectively calculates the 'rho_atom' absolute zero-frequency offset.
+    """
+    # Isolate voxels inside the protein mask
+    shifts = (map_model_np[protein_mask] - map_exp_np[protein_mask])
+    
+    mean_shift = np.mean(shifts)
+    return mean_shift
+
+
+def calculate_rho_bulk(map_exp: rsmap.Map, map_model_np: np.ndarray, solvent_mask: np.ndarray, 
+                       cell: gemmi.UnitCell, spacegroup: gemmi.SpaceGroup, hs_limit: float, plot: bool = False):
+    """
+    Optimizes rho_bulk to minimize low-resolution differences between the model 
+    (plus the flat bulk solvent mask) and the experimental data.
+    """
+    def target_scaling_function(rho_bulk):
+        # 1. Add the scaled solvent mask to the base protein model
+        temp_data = map_model_np + (rho_bulk * solvent_mask)
+        
+        # 2. Convert to reciprocal map
+        map_temp = rsmap.Map.from_3d_numpy_map(
+            temp_data, cell=cell, spacegroup=spacegroup, high_resolution_limit=hs_limit
+        )
+        
+        # 3. Align indices to experimental map
+        shared_indices = map_temp.index.intersection(map_exp.index)
+        map_temp = map_temp.loc[shared_indices]
+        
+        # 4. Return the low-resolution scaling error
+        return error_metric_for_scaling(map_temp, map_exp)
+
+    print("Running 1D bounded optimization for rho_bulk...")
+    
+    # Use minimize_scalar for robust 1D valley-finding
+    result = minimize_scalar(
+        target_scaling_function, 
+        bounds=(0.2, 0.5), 
+        method='bounded',
+        options={'xatol': 1e-4}
+    )
+    
+    best_rho_bulk = result.x
+    print(f"Optimal rho_bulk: {best_rho_bulk:.4f} e-/Å³")
+
+    # Optional plotting of the optimization landscape
+    if plot:
+        rho_bulks = np.linspace(0.2, 0.5, 30)
+        errors = [target_scaling_function(b) for b in rho_bulks]
+        
+        plt.figure(figsize=(8, 5))
+        plt.plot(rho_bulks, errors, marker='o', linestyle='-')
+        plt.xlabel("Bulk Density (e-/Å³)")
+        plt.ylabel("Mean Absolute Difference")
+        plt.title("Error Metric vs. Bulk Density")
+        plt.grid(True, alpha=0.3)
+        plt.axvline(best_rho_bulk, color='red', linestyle='--', label=f'Min: {best_rho_bulk:.3f}')
+        plt.legend()
+        plt.show()
+
+    return best_rho_bulk
+
+# ==========================================
+# MASTER PIPELINE
+# ==========================================
+
+def estimate_absolute_densities(map_exp: rsmap.Map, map_model: rsmap.Map, pdb_file: str, hs_limit: float, plot: bool = True):
+    """
+    Master function orchestrating the calculation of both rho_atom (protein offset) 
+    and rho_bulk (bulk solvent density).
+    """
+    print(f"--- Calibrating Absolute Densities for {pdb_file} ---")
+    
+    # 1. Extract metadata and numpy representations
+    cell = map_model.cell
+    spacegroup = map_model.spacegroup
+    map_model_np = map_model.to_3d_numpy_map(map_sampling=3)
+    map_exp_np = map_exp.to_3d_numpy_map(map_sampling=3)
+    grid_shape = map_model_np.shape
+    
+    # 2. Generate Masks
+    print("Generating protein and solvent masks...")
+    protein_mask, solvent_mask = generate_masks(pdb_file, grid_shape, cell, spacegroup)
+    # protein_mask = ~support_from_masker(pdb_file, map_dark_comp_np.shape)
+
+    
+    # 3. Calculate rho_atom (Mean shift in the protein region)
+    rho_atom_shift = calculate_rho_atom(map_exp_np, map_model_np, protein_mask)
+
+    print(f"Estimated rho_atom offset (mean shift inside protein): {rho_atom_shift:.5f}")
+    rho_atom = map_model_np.mean()
+    
+    # 4. Calculate rho_bulk (Optimized solvent density)
+    rho_bulk = calculate_rho_bulk(
+        map_exp=map_exp, 
+        map_model_np=map_model_np, 
+        solvent_mask=solvent_mask, 
+        cell=cell, 
+        spacegroup=spacegroup, 
+        hs_limit=hs_limit,
+        plot=plot
+    )
+    share_solvent = np.mean(solvent_mask)
+    rho_comb = rho_atom + share_solvent * rho_bulk
+    f000 = rho_comb * cell.volume
+    
+    print("\n--- Calibration Complete ---")
+    return {
+            "rho_abs_shift": rho_atom_shift,
+            "rho_atom": rho_atom,
+            "rho_bulk": rho_bulk,
+            "rho_comb": rho_comb,
+            "share_solvent": share_solvent,
+            "f000": f000
+    }
+
+def autoshift_rsmap(
+    map_in: rsmap.Map,
+    general_config: dict,
+    map_dark_comp: rsmap.Map | None = None,
+    ignore_mask: np.ndarray | bool = False,
+    diagnostic_plots: bool = False,
+) -> tuple[rsmap.Map, float]:
+    estimates = estimate_absolute_densities(map_in, map_dark_comp, general_config["pdbloc_dark"], general_config["high_resolution_limit"], plot=diagnostic_plots)
+    if np.abs(estimates["rho_abs_shift"]-estimates["rho_comb"]) > 0.01:
+        logger.warning(f"Estimated rho_atom shift ({estimates['rho_abs_shift']:.4f}) and combined rho (rho_atom + share_solvent * rho_bulk) ({estimates['rho_comb']:.4f}) differ by more than 0.01 e-/Å³. This may indicate an issue with the estimation or the maps.")
+    else:
+        logger.info(f"Estimated rho_atom shift ({estimates['rho_abs_shift']:.4f}) and combined rho (rho_atom + share_solvent * rho_bulk) ({estimates['rho_comb']:.4f}) differ by more than 0.01 e-/Å³. This may indicate an issue with the estimation or the maps.")
+    zero_freq = estimates["f000"]
+    map_in.loc[(0, 0, 0)] = {
+        map_in.amplitude_column_name: zero_freq,
+        map_in.phase_column_name: 0,
+        map_in.uncertainties_column_name: zero_freq / 10,
+    }
+    map_in.write_mtz("autoshifted_map.mtz")
+    return map_in, zero_freq
+
 def prepare_maps(
     unscaled_dark: rsmap.Map, unscaled_triggered: rsmap.Map, config: dict
 ) -> tuple[rsmap.Map, rsmap.Map, rsmap.Map]:
@@ -260,30 +459,39 @@ def prepare_maps(
     )
 
     if config["map_processing"]["dark_mean_correction"]:
-        diffmap_temp = combined_diffmap_calc(
-            map_dark,
-            map_triggered,
-            map_dark_comp,
-            diffmap_type=config["map_processing"]["diffmap_type"],
-            general_config=config["general"],
-        )
-        diffmap_temp_np = diffmap_temp.to_3d_numpy_map(
-            map_sampling=config["general"]["map_sampling"]
-        )
-        diffmap_larger = np.abs(diffmap_temp_np) > 1 * diffmap_temp_np.std()
-        logger.info(f"Diffmap std: {diffmap_temp_np.std():.3f}")
-        logger.info(
-            f"diffmap larger voxel count: {np.sum(diffmap_larger)/diffmap_larger.size}"
-        )
-
-        map_dark, zero_freq_dark = autoshift_rsmap(
-            map_dark, config["general"], map_dark_comp
-        )
-        logger.info("calculating autoshift for triggered map... with extra mask")
-        map_triggered, zero_freq_triggered = autoshift_rsmap(
-            map_triggered, config["general"], map_dark_comp, diffmap_larger
-        )
-        logger.info("calculating autoshift for triggered map... done")
+        if True:
+            diffmap_temp = combined_diffmap_calc(
+                map_dark,
+                map_triggered,
+                map_dark_comp,
+                diffmap_type=config["map_processing"]["diffmap_type"],
+                general_config=config["general"],
+            )
+            diffmap_temp_np = diffmap_temp.to_3d_numpy_map(
+                map_sampling=config["general"]["map_sampling"]
+            )
+            diffmap_larger = np.abs(diffmap_temp_np) > 1 * diffmap_temp_np.std()
+            logger.info(f"Diffmap std: {diffmap_temp_np.std():.3f}")
+            logger.info(
+                f"diffmap larger voxel count: {np.sum(diffmap_larger)/diffmap_larger.size}"
+            )
+            map_dark, zero_freq_dark = autoshift_rsmap_old(
+                map_dark, config["general"], map_dark_comp
+            )
+            logger.info("calculating autoshift for triggered map... with extra mask")
+            map_triggered, zero_freq_triggered = autoshift_rsmap_old(
+                map_triggered, config["general"], map_dark_comp, diffmap_larger
+            )
+            logger.info("calculating autoshift for triggered map... done")
+        else:
+            map_dark, zero_freq_dark = autoshift_rsmap(
+                map_dark, config["general"], map_dark_comp
+            )
+            logger.info("calculating autoshift for triggered map... with extra mask")
+            map_triggered, zero_freq_triggered = autoshift_rsmap(
+                map_triggered, config["general"], map_dark_comp, diffmap_larger
+            )
+            logger.info("calculating autoshift for triggered map... done")
 
     if not config["map_processing"]["diffmap_v2_correction"]:
         diffmap = combined_diffmap_calc(
