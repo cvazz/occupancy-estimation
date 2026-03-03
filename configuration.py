@@ -43,7 +43,7 @@ def get_file_config(
             "blocking_radius": 1.5,
             "blocking_percentile": 95,
             "exclude_solvent": True,
-            "dark_size_threshold": 1.,
+            "dark_size_threshold": 0.1,
             "exclude_large_occupancy_outliers": False,
         },
         "map_processing": {
@@ -54,6 +54,7 @@ def get_file_config(
         },
         "plot": {
             "show_ignored_voxels": True,
+            "set_ylim": False,
         },
     }
 
