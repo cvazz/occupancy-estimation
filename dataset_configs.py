@@ -31,35 +31,46 @@ def apply_config_rsEGFP2() -> dict:
         name_machine=name_machine,
     )
 
-def load_all_PL(idx: int, add_light = False) -> None:
+def load_all_PL(add_light = False) -> None:
     homepath = load_homepath()
     folderloc = homepath + "data/photolyase/"
     dataloc_dark = folderloc + "1_superdark/superdark_deposit.mtz"
     pdbloc_dark = folderloc + "1_superdark/superdark_deposit.pdb"
     datalocs_light = []
-    for ii, f in enumerate(os.listdir(folderloc)):
+    folders = (os.listdir(folderloc))
+    print(type(folders))
+
+    for ii, f in enumerate(folders):
         if not os.path.isdir(os.path.join(folderloc, f)):
             continue
         if f[:2] == "1_":
             continue
         if not f[0].isdigit():
             continue
-        f = os.listdir(folderloc)[idx]
+        f = os.listdir(folderloc)[ii]
         final = f.split("_")[-1]
         changing_bit = f + "/" +  final
         dataloc_light = folderloc + changing_bit + "_deposit.mtz"
         datalocs_light.append(dataloc_light)
+        print(ii, changing_bit, f)
 
     # dataloc_light = datalocs_light[idx]  # Just use the first
 
-def apply_config_PL_general(idx: int, add_light = False) -> dict:
+def apply_config_PL_general(name_ending: str, add_light = False) -> dict:
     homepath = load_homepath()
     folderloc = homepath + "data/photolyase/"
     dataloc_dark = folderloc + "1_superdark/superdark_deposit.mtz"
     pdbloc_dark = folderloc + "1_superdark/superdark_deposit.pdb"
-    f = os.listdir(folderloc)[idx]
-    final = f.split("_")[-1]
-    changing_bit = f + "/" +  final
+    folders = os.listdir(folderloc)
+    out = None
+    for f in folders:
+        if f[-len(name_ending):] == name_ending:
+            out = f
+    if out is None:
+        print(folders)
+        raise ValueError(f"No folder starting with {name_ending} found in {folderloc}")
+    final = out.split("_")[-1]
+    changing_bit = out + "/" +  final
     dataloc_light = folderloc + changing_bit + "_deposit.mtz"
     high_resolution_limit = 2.6
 
@@ -394,13 +405,14 @@ def load_doeke_paths() -> list[dict]:
     }
     return [info_container]
 
-apply_config_PL_30ns = lambda: apply_config_PL_general(3)
-apply_config_PL_10ns = lambda: apply_config_PL_general(13)
-apply_config_PL_3ns = lambda: apply_config_PL_general(14)
-apply_config_PL_3ps = lambda: apply_config_PL_general(7)
+apply_config_PL_30ns = lambda: apply_config_PL_general("30ns")
+apply_config_PL_100us = lambda: apply_config_PL_general("100us")
+# apply_config_PL_10ns = lambda: apply_config_PL_general("10ns")
+apply_config_PL_3ns = lambda: apply_config_PL_general("3ns")
+apply_config_PL_3ps = lambda: apply_config_PL_general("3ps")
 
-apply_config_PL_30us = lambda: apply_config_PL_general(6)
-apply_config_PL_10us = lambda: apply_config_PL_general(13)
+# apply_config_PL_30us = lambda: apply_config_PL_general(6)
+# apply_config_PL_10us = lambda: apply_config_PL_general(13)
 # apply_config_PL_3us = lambda: apply_config_PL_general(14)
 
 # from collections.abc import Callable
@@ -408,10 +420,10 @@ def get_some_configs() -> list[dict]:
     configs = []
     configs.append(apply_config_OCP())
     # configs.append(apply_config_ECH())
-    configs.append(apply_config_PL_10ns())
+    configs.append(apply_config_PL_30ns())
     configs.append(apply_config_rsEGFP2())
     # configs.append(apply_config_CAN())
-    configs.append(apply_config_PL_3ns())
+    # configs.append(apply_config_PL_3ns())
     # configs.append(apply_config_PL_30ns())
     # configs.append(apply_config_PL_3ps())
     return configs
@@ -419,7 +431,7 @@ def get_all_configs() -> list[dict]:
     configs = []
     configs.append(apply_config_OCP())
     configs.append(apply_config_ECH())
-    configs.append(apply_config_PL_10ns())
+    # configs.append(apply_config_PL_10ns())
     configs.append(apply_config_rsEGFP2())
     configs.append(apply_config_CAN())
     configs.append(apply_config_PL_3ns())

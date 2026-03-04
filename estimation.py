@@ -5,7 +5,6 @@ from matplotlib.axes import Axes
 from meteor import rsmap
 
 from logger import setup_logger
-
 logger = setup_logger()
 
 
@@ -186,6 +185,17 @@ def _create_plot_v2(
     # 2. Plot Voxel Scatter
     marker = "."
     # Note: X-axis is pseudo_occupancy (Occupancy), Y-axis is -DifferenceMap
+    if plot_config["show_ignored_voxels"]:
+        extra_mask = np.logical_and(stats["diffmap_inv"]!=0, stats["pseudo_occupancy_inv"]>0)
+        ax.plot(
+            stats["diffmap_inv"][extra_mask],
+            stats["pseudo_occupancy_inv"][extra_mask],
+            marker=".",
+            linestyle="",
+            label="excluded voxels",
+            alpha=0.3,
+            color = "gray"
+        )
     ax.plot(
         stats["diffmap_masked"],
         stats["pseudo_occupancy"],
@@ -193,24 +203,17 @@ def _create_plot_v2(
         marker=marker,
         linestyle="",
         alpha=0.5,
+        color = "red"
     )
     
 
-    if plot_config["show_ignored_voxels"]:
-        ax.plot(
-            stats["diffmap_inv"],
-            stats["pseudo_occupancy_inv"],
-            marker=".",
-            linestyle="",
-            label="excluded voxels",
-            alpha=0.3,
-        )
+    ax.set_xscale("linear")
 
     # 4. Formatting
-    ax.legend(loc="upper right")
-    ax.set_xscale("linear")
-    ax.set_ylabel("Implied occupancy "+r"$ \chi^{-1} = -\Delta\rho/\rho_{0}$")
-    ax.set_xlabel("Difference Map " + r"$-\Delta \rho$" )
+    if not plot_config.get("is_composite",False):
+        ax.legend(loc="upper right")
+        ax.set_ylabel("Implied occupancy "+r"$ \chi^{-1} = -\Delta\rho/\rho_{0}$")
+        ax.set_xlabel("Difference Map " + r"$-\Delta \rho$" )
 
     # Determine X-limits safely ignoring NaNs
     valid_means = means[~np.isnan(means)]
@@ -218,6 +221,9 @@ def _create_plot_v2(
     if len(valid_means) > 0:
         max_y = np.max(valid_means + valid_stds) * 1.1
         ax.set_ylim(0, max_y)
+    if plot_config["set_ylim"]:
+        ax.set_ylim(*plot_config["set_ylim"])
+
 
     ax.set_xlim(None,0, )
     ax.grid()
@@ -322,10 +328,10 @@ def _create_plot(
         )
 
     # 4. Formatting
-    ax.legend(loc="upper right")
-    ax.set_yscale("linear")
-    ax.set_xlabel("Implied occupancy "+r"$ \chi^{-1} = -\Delta\rho/\rho_{0}$")
-    ax.set_ylabel("Difference Map " + r"$-\Delta \rho$" )
+    if not plot_config.get("is_composite",False):
+        ax.legend(loc="upper right")
+        ax.set_ylabel("Implied occupancy "+r"$ \chi^{-1} = -\Delta\rho/\rho_{0}$")
+        ax.set_xlabel("Difference Map " + r"$-\Delta \rho$" )
 
     # Determine X-limits safely ignoring NaNs
     valid_means = means[~np.isnan(means)]
@@ -387,4 +393,106 @@ def plot_extrapolation_estimate_v2(
     fig, ax = _create_plot_v2(stats_data, trend_data, config["plot"], general_config, ax)
     return fig, ax
 
+
+def cummean_and_errors(pseudo, diff2, leng_shown=None, number_sym_ops=1):
+    leng_shown = len(diff2) if leng_shown is None else leng_shown
+    argsorted = np.argsort(diff2)[::-number_sym_ops][:leng_shown]
+    pseudo_sort = np.cumsum(pseudo[argsorted]) / (np.arange(len(argsorted))+1)
+    # 1. Your existing sorted data
+    sorted_vals = pseudo[argsorted]
+    weights = diff2[argsorted]
+    cum_mean = np.cumsum(sorted_vals) / (np.arange(len(sorted_vals)) + 1)
+    cum_weighted = np.cumsum(sorted_vals*weights) / (np.cumsum(weights) + 1e-8)
+    cum_mean_sq = np.cumsum(sorted_vals**2) / (np.arange(len(sorted_vals)) + 1)
+
+    # 4. Cumulative standard deviation
+    # We use np.maximum to avoid tiny negative numbers due to floating point error
+    cum_std = np.sqrt(np.maximum(cum_mean_sq - cum_mean**2, 0))
+    pseudo_std = cum_std
+    pseudo_ste = pseudo_std/np.sqrt(np.arange(1,len(argsorted)+1))*2
+    bias_term = [np.abs(pseudo_sort[i] - pseudo_sort[i//2]) for i in range(len(pseudo_sort))]
+    return {
+        "pseudo_sort": pseudo_sort,
+        "pseudo_weighted": cum_weighted,
+        "pseudo_ste": pseudo_ste,
+        "bias_term": bias_term,
+        "diff_sorted": diff2[argsorted],
+        "pseudo_std": pseudo_std
+    }
+
+def create_plot_v3(stats, cummean_dict,  ax=None, plot_config={}):
+    std_cutoff = plot_config.get("std_cutoff", 3.0)
+    solvent_density = plot_config.get("solvent_density", 0.4)
+    markersize = plot_config.get("markersize", 1)
+    thresh_line = cummean_dict["diff_sorted"]/solvent_density
+    average_distance_mask = cummean_dict['pseudo_sort'] + std_cutoff*cummean_dict['pseudo_std'] > thresh_line
+
+    marker = "."
+    if ax is None:
+        fig, ax = plt.subplots()
+    else:
+        fig = ax.get_figure()
+    ax.plot(
+        stats["diffmap_masked"],
+        stats["pseudo_occupancy"],
+        label="included voxels",
+        marker=marker,
+        markersize=markersize,
+        linestyle="",
+        alpha=0.5,
+    )
+    ax.fill_between(
+            -cummean_dict['diff_sorted'],
+            cummean_dict['pseudo_sort'] - cummean_dict['pseudo_std'],
+            cummean_dict['pseudo_sort'] + cummean_dict['pseudo_std'],
+            color='grey',
+            alpha=0.2,
+        )
+    ax.plot([-cummean_dict["diff_sorted"][0],0], [thresh_line[0],0], 'r--', label="Reference Density Cutoff = Solvent")
+    ax.plot(-cummean_dict['diff_sorted'], cummean_dict['pseudo_sort'], color='blue')
+
+    if np.any(average_distance_mask):
+        inclusion_index = np.where(average_distance_mask)[0][0]
+        ax.plot([-cummean_dict["diff_sorted"][inclusion_index],]*2, [0, thresh_line[inclusion_index]], 'r--', label="Diffmap Cutoff")
+        ymax = (cummean_dict['pseudo_sort'] + std_cutoff*2*cummean_dict['pseudo_std'])[inclusion_index]
+        ax.set_ylim(0.0, ymax)
+    ax.set_xlim(np.min(stats["diffmap_masked"])*1.1, 0.0)
+    ax.grid()
+
+    # 4. Formatting
+    if not plot_config.get("is_composite",False):
+        ax.set_ylabel("Implied occupancy "+r"$ \chi^{-1} = -\Delta\rho/\rho_{0}$")
+        ax.set_xlabel("Difference Map " + r"$-\Delta \rho$" )
+        ax.legend(loc="upper right")
+
+    if plot_config.get("set_ylim", False):
+        ax.set_ylim(*plot_config["set_ylim"])
+    return fig, ax
+
+def plot_extrapolation_estimate_new(
+    diffmap: rsmap.Map,
+    map_dark: rsmap.Map,
+    inclusion_mask: np.ndarray,
+    config: dict,
+    ax: Axes | None = None,
+) -> tuple[Figure, Axes]:
+    general_config = config["general"]
+
+    diffmap_np = diffmap.to_3d_numpy_map(map_sampling=general_config["map_sampling"])
+    map_dark_np = map_dark.to_3d_numpy_map(map_sampling=general_config["map_sampling"])
+    logger.warning(
+        f"Mean of diffmap_np: {np.mean(diffmap_np)}, Mean of map_dark_np: {np.mean(map_dark_np)}"
+    )
+    stats_data = _calculate_statistics(diffmap_np, map_dark_np, inclusion_mask)
+    cummean_dict = cummean_and_errors(stats_data["pseudo_occupancy"], -stats_data["diffmap_masked"], number_sym_ops=1)
+    # trend_data = _analyze_threshold_trends(
+    #     stats_data["diffmap_masked"],
+    #     stats_data["pseudo_occupancy"],
+    #     stats_data["weight"],
+    # )
+
+
     # 5. Visualization
+    return create_plot_v3(stats_data, cummean_dict, plot_config=config["plot"], ax=ax)
+
+ 

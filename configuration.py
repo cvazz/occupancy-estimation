@@ -25,7 +25,7 @@ def get_file_config(
         "general": {
             "name_human": name_human if name_human else name_machine,
             "name_machine": name_machine,
-            "output_base_folder": outpath if outpath else ".",
+            "output_base_folder": outpath if outpath else load_homepath() +"tmp/diffmap_data/",
             "map_sampling": 3,
             "high_resolution_limit": high_resolution_limit,
         },
@@ -55,10 +55,13 @@ def get_file_config(
         "plot": {
             "show_ignored_voxels": True,
             "set_ylim": False,
+            "is_composite": False,
+            "std_cutoff": 3.0,
+            "solvent_density": 0.4,
         },
     }
 
-    output_folder = config["general"]["output_base_folder"] + "/" + name_machine + "/"
+    output_folder = config["general"]["output_base_folder"] + "/" 
     config["general"]["output_folder"] = output_folder
     config["general"]["pdbloc_dark"] = pdbloc_dark
     return config
