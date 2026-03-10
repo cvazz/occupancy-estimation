@@ -38,7 +38,6 @@ def load_all_PL(add_light = False) -> None:
     pdbloc_dark = folderloc + "1_superdark/superdark_deposit.pdb"
     datalocs_light = []
     folders = (os.listdir(folderloc))
-    print(type(folders))
 
     for ii, f in enumerate(folders):
         if not os.path.isdir(os.path.join(folderloc, f)):
@@ -84,7 +83,6 @@ def apply_config_PL_general(name_ending: str, add_light = False) -> dict:
     columns_triggered = dict(
         amplitude_column="F", uncertainty_column="SIGF", phase_column="PHIF-model"
     )
-    print(dataloc_light)
     config = get_file_config(
         dataloc_dark=dataloc_dark,
         dataloc_light=dataloc_light,
@@ -407,7 +405,7 @@ def load_doeke_paths() -> list[dict]:
 
 apply_config_PL_30ns = lambda: apply_config_PL_general("30ns")
 apply_config_PL_100us = lambda: apply_config_PL_general("100us")
-# apply_config_PL_10ns = lambda: apply_config_PL_general("10ns")
+apply_config_PL_10ns = lambda: apply_config_PL_general("10ns")
 apply_config_PL_3ns = lambda: apply_config_PL_general("3ns")
 apply_config_PL_3ps = lambda: apply_config_PL_general("3ps")
 
@@ -431,7 +429,7 @@ def get_all_configs() -> list[dict]:
     configs = []
     configs.append(apply_config_OCP())
     configs.append(apply_config_ECH())
-    # configs.append(apply_config_PL_10ns())
+    configs.append(apply_config_PL_10ns())
     configs.append(apply_config_rsEGFP2())
     configs.append(apply_config_CAN())
     configs.append(apply_config_PL_3ns())

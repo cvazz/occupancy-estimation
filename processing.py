@@ -554,7 +554,7 @@ def prepare_maps(
                 map_dark,
                 map_triggered,
                 map_dark_comp,
-                processing_config=config["map_processing"],
+                processing_config=config["map_processing"] | {"diffmap_type": "vanilla"},
                 general_config=config["general"],
                 allow_saving=False
             )

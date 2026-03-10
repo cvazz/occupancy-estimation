@@ -127,29 +127,31 @@ def _calculate_negative_density_trends(diffmap_np, map_dark_np, mask_np, xtr_ran
     }
 
 
-def plot_negative_density_trends(neg_density_plot, neg_density_fit, ax=None):
+def plot_negative_density_trends(neg_density_plot, neg_density_fit, figargs={}, ax=None):
     xtr_range_plot = neg_density_plot["xtr_range"]
     neg_dens_plot = neg_density_plot["neg_dens"]
     xtr_range_fit = neg_density_fit["xtr_range"]
     neg_dens_fit = neg_density_fit["neg_dens"]
+    fit_subtext = figargs.get("title", "")
+    fit_text = f"Fit: {fit_subtext}" if fit_subtext else "Linear Fit"
+    color = figargs.get("color", "blue")
     if ax is None:
         fig, ax = plt.subplots()
     else:
-        fig = None
-    ax.plot(xtr_range_plot, -neg_dens_plot, "x")
+        fig = ax.get_figure()
+    ax.plot(xtr_range_plot, -neg_dens_plot, "x", color=color)
 
     fit_lowest2, fit_biggest2, intersect, intersect_y = get_fits2(
         -neg_dens_fit, xtr_range_fit, 3, return_all=True
     )
-    ax.plot(xtr_range_fit, fit_lowest2, "--", color="gray")
+    ax.plot(xtr_range_fit, fit_lowest2, "--", color=color)
     ax.plot(
         xtr_range_fit,
         fit_biggest2,
         "--",
-        color="gray",
-        label=f"Fits (Intersect at {intersect:.2f} i.e. {1/intersect:.2f})",
+        color=color,
+        label=fit_text,
     )
-    print()
     ax.scatter(
         intersect,
         intersect_y,
@@ -158,7 +160,10 @@ def plot_negative_density_trends(neg_density_plot, neg_density_fit, ax=None):
         color="brown",
         label=f"Intersection at {intersect:.2f} (i.e. {1/intersect:.2f})",
     )
-    ax.legend(loc="upper right")
+    if figargs.get("legend", False):
+        ax.legend(loc="upper left")
+    else: 
+        ax.legend(loc="center left")
     ax.set_xlabel("Extrapolation factor")
     ax.set_ylabel("Negative density sum")
     xmax = np.max(xtr_range_plot) * 1.1
@@ -168,13 +173,13 @@ def plot_negative_density_trends(neg_density_plot, neg_density_fit, ax=None):
     return fig, ax
 
 
-def nse_analysis(diffmap, map_dark, inclusion_mask, ax):
+def nse_analysis(diffmap, map_dark, inclusion_mask, figargs={}, ax=None):
     diffmap_np = diffmap.to_3d_numpy_map(map_sampling=3)
     map_dark_np = map_dark.to_3d_numpy_map(map_sampling=3)
 
     xtr_range_show = np.arange(1, 15)
     xtr_range_fit = np.concatenate(
-        (np.linspace(0, 0.8, 8), xtr_range_show, np.linspace(50, 80, 8))
+        (np.linspace(1.4, 0.8, 8), xtr_range_show, np.linspace(50, 80, 8))
     )
     neg_density_fit = _calculate_negative_density_trends(
         diffmap_np, map_dark_np, inclusion_mask, xtr_range_fit
@@ -182,8 +187,10 @@ def nse_analysis(diffmap, map_dark, inclusion_mask, ax):
     neg_density_plot = _calculate_negative_density_trends(
         diffmap_np, map_dark_np, inclusion_mask, xtr_range_show
     )
+    if ax is None:
+        fig, ax = plt.subplots()
 
-    return plot_negative_density_trends(neg_density_plot, neg_density_fit, ax)
+    return plot_negative_density_trends(neg_density_plot, neg_density_fit, figargs, ax=ax)
 
 
 ################################ PANDDA ########################################
@@ -226,7 +233,7 @@ def _calculate_pandda(diffmap_np, map_dark_np, mask_np):
     }
 
 
-def plot_pandda_results(pandda_dict, alpha=None, axs=None):
+def plot_pandda_results(pandda_dict, alpha=None, axs=None, improved=False):
     pseudo_occupancy = pandda_dict["xtr_range"]
     mean_local = pandda_dict["mean_local"]
     mean_global = pandda_dict["mean_global"]
@@ -237,23 +244,27 @@ def plot_pandda_results(pandda_dict, alpha=None, axs=None):
         fig = None
 
     ax = axs[0]
+    scatter_kwargs = dict(
+        s=200,
+        facecolor="none",
+        color="brown",
+    )
     if alpha is not None:
         ax.axvline(alpha, c="k", linestyle="-.", label="alpha_true")
     mean_diff = mean_global - mean_local
     ax.plot(pseudo_occupancy, +mean_diff, label="global-local")
+
     pk_val_idx = np.argmax(mean_diff)
     pk_val_narrow = pseudo_occupancy[pk_val_idx]
     # pseudo_occ = np.argwhere(pseudo_occupancy == pk_val_narrow)[0]
+    scatter_kwargs["label"] = f"Peak at {pk_val_narrow:.2f}"
     ax.scatter(
         pseudo_occupancy[pk_val_idx],
         mean_diff[pk_val_idx],
-        s=200,
-        facecolor="none",
-        color="brown",
-        label=f"Peak at {pk_val_narrow:.2f}",
+        **scatter_kwargs
     )
+
     # ax.axvline(pseudo_occupancy[pk_val_idx], color="green", label=f"Peak at {pk_val_narrow:.2f}")
-    ax.legend()
     ax.set_title("PanDDA method")
     ax = axs[1]
     if alpha is not None:
@@ -261,7 +272,23 @@ def plot_pandda_results(pandda_dict, alpha=None, axs=None):
     ax.plot(pseudo_occupancy, mean_local, label="local")
     ax.plot(pseudo_occupancy, mean_global, label="global")
     ax.set_ylim(-1, 1)
-    ax.legend()
+
+    if improved:
+        mean_local_alt = mean_local*(1+np.sign(mean_local))/2
+        mean_diff = mean_global - mean_local_alt
+        axs[0].plot(pseudo_occupancy, +mean_diff, label="global - non-neg. local")
+
+        pk_val_idx = np.argmax(mean_diff)
+        pk_val_narrow = pseudo_occupancy[pk_val_idx]
+        scatter_kwargs["label"] = f"Peak at {pk_val_narrow:.2f}"
+        axs[0].scatter(
+            pseudo_occupancy[pk_val_idx],
+            mean_diff[pk_val_idx],
+            **scatter_kwargs
+        )
+        axs[1].plot(pseudo_occupancy, mean_local_alt, label="local \n(nonnegative)")
+    for ax in axs:
+        ax.legend()
     return fig, axs
 
 

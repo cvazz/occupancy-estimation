@@ -9,6 +9,19 @@ def load_homepath():
     homepath = os.sep.join(path_parts[: idx + 1]) + "/"
     return homepath
 
+def load_figurepath():
+    return r"/Users/sbielfel/Dropbox/Apps/Overleaf/Occupancy Determination/figs/"
+
+def minimal_masking_config():
+    return {
+            "sigma": 3,
+            "min_blob_size": 0.3,  # in A^3
+            "blocking_radius": 0.1,
+            "blocking_percentile": 95,
+            "exclude_solvent": False,
+            "dark_size_threshold": 0.,
+            "exclude_large_occupancy_outliers": False,
+    }
 
 def get_file_config(
     dataloc_dark: str,
@@ -58,6 +71,7 @@ def get_file_config(
             "is_composite": False,
             "std_cutoff": 3.0,
             "solvent_density": 0.4,
+            "minimum_datapoints": 10,
         },
     }
 
