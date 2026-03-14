@@ -4,6 +4,7 @@ import reciprocalspaceship as rs
 import matplotlib.pyplot as plt
 from scipy.optimize import minimize_scalar
 from pathlib import Path
+import copy
 
 
 import pickle
@@ -13,7 +14,6 @@ from meteor import compute_meteor_difference_map
 from meteor import rsmap
 from meteor.utils import cut_resolution
 from meteor.scale import scale_maps
-from meteor.scale import compute_scale_factors
 from meteor.sfcalc import gemmi_structure_to_calculated_map
 from meteor.diffmaps import compute_difference_map
 from meteor.scripts.common import (
@@ -28,14 +28,43 @@ from logger import setup_logger
 logger = setup_logger()
 
 
-def get_maps(input_files_dict: dict) -> tuple[rsmap.Map, rsmap.Map]:
-    high_res_limit = input_files_dict["general"]["high_resolution_limit"]
+def convert_ints_to_sf2(
+    ds: rs.DataSet, cols: dict, map_dark_comp: rsmap.Map
+) -> rs.DataSet:
+    ds_ints = ds[cols["ints_column"]]
+    ds_sigi = ds[cols["int_uncertainty_column"]]
+    ds[cols["amplitude_column"]] = np.sqrt(np.abs(ds_ints)) * np.sign(ds_ints)
+    ds[cols["uncertainty_column"]] = np.sqrt(ds_sigi / (2 * np.abs(ds_ints)))
+    ds[cols["phase_column"]] = map_dark_comp.phases
+    cols.pop("ints_column")
+    cols.pop("int_uncertainty_column")
+    return ds
 
+
+def get_maps(input_files_dict: dict) -> tuple[rsmap.Map, rsmap.Map]:
     dataloc_dark = input_files_dict["input_files"]["map_dark"]
     dataloc_triggered = input_files_dict["input_files"]["map_triggered"]
-
     ds_triggered = rs.read_mtz(dataloc_triggered)
     ds_dark = rs.read_mtz(dataloc_dark)
+
+    if input_files_dict["input_files"]["columns_are_ints"]:
+        dark_cols = input_files_dict["input_files"]["columns_dark"]
+        triggered_cols = input_files_dict["input_files"]["columns_triggered"]
+        struc = gemmi.read_pdb(input_files_dict["input_files"]["pdb_dark"])
+        map_dark_comp = gemmi_structure_to_calculated_map(
+            struc,
+            high_resolution_limit=input_files_dict["general"]["high_resolution_limit"],
+        )
+        ds_dark = convert_ints_to_sf2(ds_dark, dark_cols, map_dark_comp)
+        ds_triggered = convert_ints_to_sf2(ds_triggered, triggered_cols, map_dark_comp)
+    return get_maps_sf(ds_dark, ds_triggered, input_files_dict)
+
+
+def get_maps_sf(
+    ds_dark, ds_triggered, input_files_dict: dict
+) -> tuple[rsmap.Map, rsmap.Map]:
+    high_res_limit = input_files_dict["general"]["high_resolution_limit"]
+
     if high_res_limit:
         logger.info(f"Imposing high_resolution_limit: {high_res_limit}")
         ds_dark = cut_resolution(ds_dark, high_resolution_limit=high_res_limit)
@@ -46,12 +75,11 @@ def get_maps(input_files_dict: dict) -> tuple[rsmap.Map, rsmap.Map]:
     dark_columns = input_files_dict["input_files"]["columns_dark"]
     triggered_columns = input_files_dict["input_files"]["columns_triggered"]
     if input_files_dict["input_files"]["impose_dark_phases"]:
-        ds_triggered[triggered_columns["phase_column"]] = ds_dark[
+        ds_triggered.loc[:, triggered_columns["phase_column"]] = ds_dark[
             dark_columns["phase_column"]
         ]
     unscaled_dark = rsmap.Map(ds_dark, **dark_columns)
     unscaled_triggered = rsmap.Map(ds_triggered, **triggered_columns)
-
     return unscaled_dark, unscaled_triggered
 
 
@@ -115,11 +143,10 @@ def calculate_diffmaps(
                 if meta.k_parameter_optimization
                 else None
             )
-            if not only_kweighted:
-                opt_tv = meta.tv_weight_optimization.optimal_parameter_value
-                logger.info(
-                    f"loading: {opt_k}, tv_weight: {opt_tv}, only_kweighted: {only_kweighted}"
-                )
+            opt_tv = meta.tv_weight_optimization.optimal_parameter_value
+            logger.info(
+                f"loading: {opt_k}, tv_weight: {opt_tv}, only_kweighted: {only_kweighted}"
+            )
         else:
             raise ValueError("No parameters provided and no meta file found.")
 
@@ -173,9 +200,10 @@ def get_meta_loc(general_config):
     return evaluation_path_basis, name
 
 
-def get_meta_loc_diffmap(general_config):
+def get_meta_loc_diffmap(general_config, processing_config):
+    binary_string = processing_dict_2_binary(processing_config)
     evaluation_path_basis, name = get_meta_loc(general_config)
-    name = f"diffmap_config_{general_config['high_resolution_limit']*10}.pkl"
+    name = f"diffmap_config_{general_config['high_resolution_limit']*10}_{binary_string}.pkl"
     meta_loc = evaluation_path_basis + name
     return meta_loc
 
@@ -491,6 +519,13 @@ def autoshift_rsmap(
     ignore_mask: np.ndarray | bool = False,
     diagnostic_plots: bool = False,
 ) -> tuple[rsmap.Map, float]:
+    if map_dark_comp is None:
+        struc = gemmi.read_pdb(general_config["pdbloc_dark"])
+        map_dark_comp = gemmi_structure_to_calculated_map(
+            struc,
+            high_resolution_limit=general_config["high_resolution_limit"],
+            map_sampling=general_config["map_sampling"],
+        )
     estimates = estimate_absolute_densities(
         map_in,
         map_dark_comp,
@@ -527,9 +562,9 @@ def processing_dict_2_binary(processing_dict) -> str:
 
     for key in key_names:
         binary_string += "1" if processing_dict[key] else "0"
-    if len(binary_string) != 3:
+    if len(binary_string) != 4:
         raise ValueError(
-            f"Expected 3 entries, got {len(binary_string)}. Keys were: {key_names}"
+            f"Expected 4 entries, got {len(binary_string)}. Keys were: {key_names}"
         )
     return binary_string
 
@@ -548,7 +583,9 @@ def prepare_maps(
     struc = gemmi.read_pdb(config["input_files"]["pdb_dark"])
     check_highres_limit(unscaled_dark, unscaled_triggered, config["general"])
     map_dark_comp = gemmi_structure_to_calculated_map(
-        struc, high_resolution_limit=config["general"]["high_resolution_limit"]
+        struc,
+        high_resolution_limit=config["general"]["high_resolution_limit"],
+        map_sampling=config["general"]["map_sampling"],
     )
 
     map_dark = scale_maps(reference_map=map_dark_comp, map_to_scale=unscaled_dark)
@@ -638,3 +675,130 @@ def prepare_maps(
         logger.warning(f"Diffmap zero frequency: {zero_freq_diff}")
 
     return diffmap, map_dark, map_triggered
+
+
+def prepare_maps_v2(
+    unscaled_dark: rsmap.Map, unscaled_triggered: rsmap.Map, config: dict
+) -> tuple[rsmap.Map, rsmap.Map, rsmap.Map]:
+
+    general_config = config["general"]
+    struc = gemmi.read_pdb(config["input_files"]["pdb_dark"])
+    check_highres_limit(unscaled_dark, unscaled_triggered, general_config)
+    map_dark_comp = gemmi_structure_to_calculated_map(
+        struc,
+        high_resolution_limit=general_config["high_resolution_limit"],
+        map_sampling=general_config["map_sampling"],
+    )
+
+    map_dark = scale_maps(reference_map=map_dark_comp, map_to_scale=unscaled_dark)
+    map_triggered = scale_maps(
+        reference_map=map_dark_comp, map_to_scale=unscaled_triggered
+    )
+
+    diffmap_temp = combined_diffmap_calc(
+        map_dark,
+        map_triggered,
+        map_dark_comp,
+        processing_config=config["map_processing"] | {"preprocessing": True},
+        general_config=config["general"],
+        allow_saving=False,
+    )
+    diffmap_temp_np = diffmap_temp.to_3d_numpy_map(
+        map_sampling=general_config["map_sampling"]
+    )
+    diffmap_larger = np.abs(diffmap_temp_np) > 1 * diffmap_temp_np.std()
+    logger.info(f"Diffmap std: {diffmap_temp_np.std():.3f}")
+    lgtxt = f"diffmap larger voxel count: {np.sum(diffmap_larger)/diffmap_larger.size}"
+    logger.info(lgtxt)
+    map_dark, zero_freq_dark = autoshift_rsmap_old(
+        map_dark, config["general"], map_dark_comp
+    )
+    logger.info("calculating autoshift for triggered map... with extra mask")
+    map_triggered, zero_freq_triggered = autoshift_rsmap_old(
+        map_triggered, config["general"], map_dark_comp, diffmap_larger
+    )
+    logger.info("calculating autoshift for triggered map... done")
+
+    if not config["map_processing"]["diffmap_v2_correction"]:
+        diffmap = combined_diffmap_calc(
+            map_dark,
+            map_triggered,
+            map_dark_comp,
+            processing_config=config["map_processing"],
+            general_config=config["general"],
+            allow_saving=True,
+        )
+    else:
+        if config["map_processing"]["dark_mean_correction"]:
+            diffmap = diffmap_temp  # type: ignore
+        else:
+            raise ValueError("Diffmap not defined")
+
+    if config["map_processing"]["diffmap_mean_correction"]:
+        if config["map_processing"]["dark_mean_correction"]:
+            zero_freq_diff = zero_freq_triggered - zero_freq_dark  # type: ignore
+            zero_uncertainty = np.sqrt(
+                (zero_freq_dark * 0.1) ** 2 + (zero_freq_triggered * 0.1) ** 2  # type: ignore
+            )
+        else:
+            raise ValueError(
+                "Diffmap Correction can only be done if dark correction is done"
+            )
+
+        diffmap.loc[(0, 0, 0)] = {
+            diffmap.amplitude_column_name: zero_freq_diff,
+            diffmap.phase_column_name: 0,
+            diffmap.uncertainties_column_name: zero_uncertainty,
+        }
+        logger.warning(f"Diffmap zero frequency: {zero_freq_diff}")
+
+    return diffmap, map_dark, map_triggered
+
+
+def get_map_dark(config, old=False):
+    ds_dark = rs.read_mtz(config["input_files"]["map_dark"])
+    print(np.min(ds_dark.compute_dHKL()["dHKL"]))
+    struc_dark = gemmi.read_pdb(config["input_files"]["pdb_dark"])
+    map_dark_comp = gemmi_structure_to_calculated_map(
+        struc_dark,
+        high_resolution_limit=config["general"]["high_resolution_limit"],
+    )
+    if config["input_files"]["columns_dark"]["phase_column"] not in ds_dark.columns:
+        phase_col_name = config["input_files"]["columns_dark"]["phase_column"]
+        warning_msg = f"Phase column {phase_col_name} not found in dark dataset. "
+        warning_msg += "Using calculated phases from the PDB structure."
+        logger.warning(warning_msg)
+        ds_dark[phase_col_name] = map_dark_comp.phases
+    map_dark = rsmap.Map(ds_dark, **config["input_files"]["columns_dark"])
+    map_dark.canonicalize_amplitudes()
+    map_dark = cut_resolution(
+        map_dark, high_resolution_limit=config["general"]["high_resolution_limit"]
+    )
+    map_dark = scale_maps(reference_map=map_dark_comp, map_to_scale=map_dark)
+    if old:
+        map_dark, shift2 = autoshift_rsmap_old(
+            copy.deepcopy(map_dark),
+            config["general"] | {"pdbloc_dark": config["input_files"]["pdb_dark"]},
+            map_dark_comp,
+        )
+    else:
+        map_dark, shift1 = autoshift_rsmap(
+            copy.deepcopy(map_dark),
+            config["general"] | {"pdbloc_dark": config["input_files"]["pdb_dark"]},
+            map_dark_comp,
+        )
+    return map_dark
+
+
+def get_maps_diff(config, map_dark=None, old=False):
+    if map_dark is None:
+        map_dark = get_map_dark(config, old)
+    else:
+        map_dark = copy.deepcopy(map_dark)
+
+    ds_diff = rs.read_mtz(config["input_files"]["map_diff"])
+    diffmap = rsmap.Map(ds_diff, **config["input_files"]["columns_diff"])
+    compute_dHKL = ds_diff.compute_dHKL()
+    dmin = np.min(compute_dHKL["dHKL"])
+    map_dark = cut_resolution(map_dark, high_resolution_limit=dmin)
+    return map_dark, diffmap
