@@ -285,8 +285,21 @@ def make_inclusion_mask(diffmap: rsmap.Map, map_dark: rsmap.Map, config: dict):
         log_text += " (deactivate via 'exclude_negative_dark' parameter)"
         if number_negative_darks:
             logger.warning(log_text)
+    else:
+        mask_total_before = np.sum(mask_np)
+        map_dark_np = map_dark.to_3d_numpy_map(map_sampling=map_sampling)
+        map_dark_threshold = 0
+        mask_np = np.logical_and(mask_np, map_dark_np > map_dark_threshold)
+        number_negative_darks = mask_total_before - np.sum(mask_np)
+        log_text = ""
+        log_text += f"Excluding an addtional {number_negative_darks} voxels from mask due" 
+        log_text += f"dark map smaller than mean + {dark_size_std_threshold} * sigma"
+        log_text += " (deactivate via 'exclude_negative_dark' parameter)"
+        if number_negative_darks:
+            logger.warning(log_text)
 
     if parameters.get('exclude_positive_diffmap', True):
+        logger.warning("Excluding voxels with positive difference density from mask (activate via 'exclude_positive_diffmap' parameter)")
         mask_np = np.logical_and(mask_np, diffmap_np < 0)
 
     if parameters.get("exclude_large_occupancy_outliers", False):
