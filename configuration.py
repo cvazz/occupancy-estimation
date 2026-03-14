@@ -15,7 +15,7 @@ def load_figurepath():
 def minimal_masking_config():
     return {
             "sigma": 3,
-            "min_blob_size": 0.3,  # in A^3
+            "min_blob_size": 0.03,  # in A^3
             "blocking_radius": 0.1,
             "blocking_percentile": 95,
             "exclude_solvent": False,
@@ -79,6 +79,7 @@ def get_file_config(
             "columns_dark": columns_dark,
             "columns_triggered": columns_triggered,
             "impose_dark_phases": True,
+            "columns_are_ints": False,
         },
     } | get_base_config()
 
