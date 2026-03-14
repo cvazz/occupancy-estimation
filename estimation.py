@@ -33,9 +33,18 @@ def _calculate_statistics(
 
     weight = np.abs(diffmap_np[mask_np])
 
-    diffmap_sigma = (diffmap_np - np.mean(diffmap_np)) / np.std(diffmap_np)
+    sigma_level  = np.sqrt(np.sum((diffmap_np-np.mean(diffmap_np))**2)/diffmap_np.size)
+    # sigma_level  = np.sqrt(np.sum((diffmap_np-np.mean(diffmap_np))**2)/diffmap_np.size)
+
+    diffmap_sigma = (diffmap_np - np.mean(diffmap_np)) / sigma_level
+    # diffmap_sigma = (diffmap_np ) / sigma_level
+    diffmap_sigma = (np.abs(diffmap_sigma))*np.sign(diffmap_sigma)
     # diffmap_sigma = diffmap_np
 
+    # plt.figure()
+    # plt.hist(diffmap_sigma.flatten(), bins=300, alpha=0.5, label="Raw Diffmap")
+    # plt.yscale('log')
+    # plt.show()
     return {
         "diffmap_raw": diffmap_np[mask_np],
         "pseudo_occupancy": pseudo_occupancy[mask_np],
@@ -124,7 +133,7 @@ def _create_plot_v2(
     if ax is None:
         fig, ax = plt.subplots(1, 1, figsize=(9, 6), tight_layout=True)
     else:
-        fig = None
+        fig = ax.get_figure()
     # ax.set_title(general_config["name_human"])
 
     # Unpack data
@@ -232,7 +241,7 @@ def _create_plot_v2(
     )
     ax.grid()
 
-    return fig, ax
+    return fig, ax # type: ignore
 
 
 def _create_plot(
@@ -349,7 +358,7 @@ def _create_plot(
     ax.set_ylim(0, None)
     ax.grid()
 
-    return fig, ax
+    return fig, ax # type: ignore
 
 
 def plot_extrapolation_estimate(
@@ -426,7 +435,7 @@ def cummean_and_errors(stats_data, leng_shown=None, number_sym_ops=1, plot_confi
         np.abs(pseudo_sort[i] - pseudo_sort[i // 2]) for i in range(len(pseudo_sort))
     ]
 
-    solvent_density = plot_config.get("solvent_density", 0.4)
+    solvent_density = plot_config.get("solvent_density", 0.3)
     thresh_line = diff2[argsorted] / solvent_density
 
     return {
@@ -449,16 +458,22 @@ def create_plot_v3(stats, cummean_dict, extra_info={}, ax=None, plot_config={}):
         cummean_dict["pseudo_sort"] + std_cutoff * cummean_dict["pseudo_std"]
         > thresh_line
     )
+    bottom_index = 0
+    if np.any(average_distance_mask):
+        bottom_index = np.where(average_distance_mask)[0][0]
+
+    min_size_middle = 10
 
     marker = "."
     if ax is None:
         fig, ax = plt.subplots()
     else:
         fig = ax.get_figure()
+    ########################## Data ###################################
     ax.plot(
         stats["diffmap_sigma"],
         stats["pseudo_occupancy"],
-        label="included voxels",
+        label="Voxel Prediction",
         marker=marker,
         markersize=markersize,
         linestyle="",
@@ -472,16 +487,40 @@ def create_plot_v3(stats, cummean_dict, extra_info={}, ax=None, plot_config={}):
         alpha=0.2,
     )
     ax.plot(
-        [-cummean_dict["diff_sigma"][0], 0],
-        [thresh_line[0], 0],
-        "r--",
-        # label="Reference Density Cutoff = Solvent",
+        -cummean_dict["diff_sigma"][:bottom_index+1],
+        cummean_dict["pseudo_sort"][:bottom_index+1],
+        color="blue",
+        label="Cumulative Mean",
     )
-    ax.plot(-cummean_dict["diff_sigma"], cummean_dict["pseudo_sort"], color="blue")
+    ax.plot(
+        -cummean_dict["diff_sigma"][bottom_index:],
+        cummean_dict["pseudo_sort"][bottom_index:],
+        color="gray",
+        # label="Cumulative Mean",
+    )
+    ########################## Thresholds ###################################
+    pref = 1.1
+    lowest_sigma = -cummean_dict["diff_sigma"][0] * pref
+    lowest_thresh = thresh_line[0] * pref
 
-    bottom_index = None
-    if np.any(average_distance_mask):
-        bottom_index = np.where(average_distance_mask)[0][0]
+    max_xtr = 11
+    ax.fill_between(
+        [lowest_sigma, 0],
+        [lowest_thresh, 0],
+        [max_xtr, max_xtr],
+        color="red",
+        alpha=0.2,
+    )
+
+
+    ax.plot(
+        [lowest_thresh, 0],
+        [lowest_sigma, 0],
+        "--",
+        color="gray",
+        label="Reference Density Cutoff = Solvent",
+    )
+    if bottom_index > 0:
         ax.plot(
             [
                 -cummean_dict["diff_sigma"][bottom_index],
@@ -489,102 +528,100 @@ def create_plot_v3(stats, cummean_dict, extra_info={}, ax=None, plot_config={}):
             * 2,
             [0, thresh_line[bottom_index]],
             "r--",
-            label="Cutoff Boundaries",
+            label="3x Std Dev. Cutoff",
         )
         ymax = (
             cummean_dict["pseudo_sort"] + std_cutoff * 2 * cummean_dict["pseudo_std"]
         )[bottom_index]
         ax.set_ylim(0.0, ymax)
 
-    top_index = extra_info.get("multiplicity", 1) * plot_config.get(
-        "minimum_datapoints", None
-    )
-    if len(cummean_dict["diff_sigma"]) > top_index:
-        ax.plot(
-            [
-                -cummean_dict["diff_sigma"][top_index],
-            ]
-            * 2,
-            [0, thresh_line[top_index]],
-            # label="Diffmap Cutoff",
-            "--",
-            color="gray"
-        )
-    ax.set_xlim(np.min(stats["diffmap_sigma"]) * 1.1, 0.0)
-    ax.grid()
-
-    if False:
-        ax2 = ax.twinx()
-        ax2.plot(
-            -cummean_dict["diff_sorted"],
-            np.arange(len(cummean_dict["diff_sorted"])),
-            color="green",
-            label="Cumulative Voxels",
+    ############## Optimimum
+    stats_kwarg = dict(
+            transform=ax.transAxes,
+            fontsize=10,
+            verticalalignment="top",
+            horizontalalignment="right",
+            bbox=dict(boxstyle="round", facecolor="white", alpha=0.8),
         )
 
-    if bottom_index is not None and top_index is not None and top_index < bottom_index:
-        middle_diff = (cummean_dict["diff_sigma"][bottom_index]+cummean_dict["diff_sigma"][top_index])/2
-
-        middle_index = np.where(middle_diff>cummean_dict["diff_sigma"])[0][0]-1
-        pseudo_range = cummean_dict["pseudo_sort"][top_index:bottom_index+1]
+    is_there_a_middle = bottom_index > 0 and min_size_middle < bottom_index
+    if is_there_a_middle:
+        middle_diff = (
+            cummean_dict["diff_sigma"][bottom_index] + cummean_dict["diff_sigma"][0]
+        ) / 2
+        middle_index = np.where(middle_diff > cummean_dict["diff_sigma"])[0][0]
+        middle_index = max(middle_index, min_size_middle)
+        pseudo_range = cummean_dict["pseudo_sort"][: bottom_index + 1]
         middle_mean = cummean_dict["pseudo_sort"][middle_index]
-        ax.plot(
-            [-cummean_dict["diff_sigma"][middle_index]] * 2,
-            middle_mean - np.array([-1, 1]) * cummean_dict["pseudo_std"][middle_index],
-            color="blue",
-        )
-        ax.scatter(
-            -cummean_dict["diff_sigma"][middle_index],
-            middle_mean,
+        middle_diff = -cummean_dict["diff_sigma"][middle_index]
+        middle_std_range = np.array([-1, 1]) * cummean_dict["pseudo_std"][middle_index]
+        ax.plot(middle_diff * np.ones(2), middle_mean - middle_std_range, color="blue")
+        optimal_kwargs = dict(
             s=200,
             facecolor="none",
             color="brown",
-            label=f"Optimal",
+            label="Optimal",
         )
+        ax.scatter(middle_diff, middle_mean, **optimal_kwargs) # type: ignore
 
         plot_stats = dict(
             middle_mean=middle_mean,
             middle_std=cummean_dict["pseudo_std"][middle_index],
             middle_std_rel=cummean_dict["pseudo_std"][middle_index] / middle_mean,
-            estimation_range=cummean_dict["diff_sigma"][top_index]
-            / cummean_dict["diff_sigma"][bottom_index],
+            estimation_range=cummean_dict["diff_sigma"][0]
+            / cummean_dict["diff_sigma"][bottom_index]
+            - 1,
             variation_range=(np.max(pseudo_range) - np.min(pseudo_range)) / middle_mean,
         )
+        chi = "$\\chi^{-1}$"
         text = ""
-        text += f" $\\chi$ =  {middle_mean:.3f}"
+        text += f" {chi} =  {middle_mean:.3f}"
         text += f"\nSt. Dev.: {plot_stats['middle_std']:.3f} ({plot_stats['middle_std_rel']:.1%})"
-        text += f"\nMin-Max Variation: {plot_stats['variation_range']:.1%}"
-        text += f"\n Estimation Range: {plot_stats['estimation_range']:.0%}"
+        if plot_config.get("comparison_to_reference", False):
+            text += f"\nReference: {plot_config['comparison_to_reference']['value']:.3f} (1/{1/plot_config['comparison_to_reference']['value']:.1f})"
+        if np.min(pseudo_range)<middle_mean - plot_stats['middle_std'] and False:
+            text += f"\nWarning: Min. est. less than\n1 std. dev. than reported est."
+        if np.max(pseudo_range)>middle_mean + plot_stats['middle_std'] and False:
+            text += f"\nWarning: Max. est. more than\n1 std. dev. than reported est."
+        # text += f"\nMin-Max Variation: {plot_stats['variation_range']:.1%}"
+        # text += f"\n Estimation Range: {plot_stats['estimation_range']:.0%}"
         # place legend like box in top right corner
-        ax.text(
-            0.95,
-            0.95,
-            text,
-            transform=ax.transAxes,
-            fontsize=10,
-            verticalalignment="top",
-            horizontalalignment="right",
-            bbox=dict(boxstyle="round", facecolor="white", alpha=0.8),
-        )
-    elif bottom_index is not None and top_index is not None: 
-        text = "No Prediction because \n estimation range is negative"
-        ax.text(
-            0.95,
-            0.95,
-            text,
-            transform=ax.transAxes,
-            fontsize=10,
-            verticalalignment="top",
-            horizontalalignment="right",
-            bbox=dict(boxstyle="round", facecolor="white", alpha=0.8),
-        )
+        ax.text(0.95, 0.95, text, **stats_kwarg) # type: ignore
 
+    elif bottom_index is not None:
+        text = "No Prediction because \n estimation range is too small"
+        ax.text(0.95, 0.95, text, **stats_kwarg) # type: ignore
 
     # 4. Formatting
     if not plot_config.get("is_composite", False):
-        ax.set_ylabel("Implied occupancy " + r"$ \chi^{-1} = -\Delta\rho/\rho_{0}$")
-        ax.set_xlabel("Difference Map " + r"$-\Delta \rho$")
-        ax.legend(loc="upper left")
+        ax.set_ylabel("Extrapolation factor " + r"$ \chi^{-1} = -\Delta\rho/\rho_{0}$")
+        ax.set_xlabel("Difference Map " + r"$-\Delta \rho$ (standard deviations)")
+        # ax.legend(loc="upper left")
+
+        text_kwargs = dict(
+            transform=ax.transAxes,
+            fontsize=10,
+            verticalalignment="top",
+            horizontalalignment="right",
+            bbox=dict(boxstyle="round", facecolor="white", alpha=0.4),
+        )
+        ax.text(0.25, 0.10, r"$\rho_0>\rho_{solvent}$", **text_kwargs)  # type: ignore
+        ax.text(0.95, 0.45, r"$\rho_0<\rho_{solvent}$", **text_kwargs)  # type: ignore
+
+    ax.grid()
+    ax.set_xlim((lowest_sigma, 0.0))
+
+    if True:
+        ax2 = ax.twiny()
+        ax2.plot(
+            [-cummean_dict["diff_sorted"][0], 0],
+            [thresh_line[0], 0],
+            "--",
+            color="gray",
+        )
+        ax2.set_xlim((-cummean_dict["diff_sorted"][0]) * 1.1, 0.0)
+        ax2.set_xlabel(r"$-\Delta \rho$ (absolute units)")
+
 
     if plot_config.get("set_ylim", False):
         ax.set_ylim(*plot_config["set_ylim"])
@@ -613,7 +650,7 @@ def plot_extrapolation_estimate_new(
     #     stats_data["weight"],
     # )
     extra_info = {
-        "multiplicity": len(map_dark.spacegroup.operations()),
+        "multiplicity": len(map_dark.spacegroup.operations()), # type: ignore 
     }
 
     # 5. Visualization
