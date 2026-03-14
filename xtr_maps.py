@@ -50,7 +50,13 @@ def adding_maps(
 
 
 def save_extrapolated_map(
-    info_container, xtr_factor, map_dark, diffmap, folder, name_prefix="", file_loc_diff=""
+    info_container,
+    xtr_factor,
+    map_dark,
+    diffmap,
+    folder,
+    name_prefix="",
+    file_loc_diff="",
 ):
     xtr_map = adding_maps(map_dark, diffmap, factor2=xtr_factor)
     logger.info(f"Columns of xtr: {xtr_map.columns}")
@@ -91,8 +97,74 @@ def save_extrapolated_map(
 
     # ds_temp.write_mtz(file_loc)
 
-def save_to_folder(diffmap, map_dark, parameters, info_container, save_dict: dict):
-    # copy file from pdbloc_dark to folder
+
+def save_to_folder(
+    diffmap: rsmap.Map,
+    map_dark: rsmap.Map,
+    parameters: dict,
+    info_container: dict,
+    save_dict: dict,
+):
+    """ 
+    Save generated maps and associated files into a target folder and invoke
+    save_extrapolated_map for each item in save_dict.
+
+    This function ensures the target folder exists (creating it if necessary),
+    copies selected files from info_container into that folder, and then calls
+    save_extrapolated_map for each entry in save_dict to write extrapolated maps
+    and associated artifacts to disk.
+
+        Difference map object (used as an input when saving extrapolated maps).
+        Dark/reference map object (used as an input when saving extrapolated maps).
+        Configuration dictionary controlling where and how files are saved.
+        Required fields:
+          - "folder" (str or Path-like): target directory where outputs and copies
+            will be written. If the path exists and is not a directory, a
+            NotADirectoryError will be raised.
+          - "xtr_prefix" (str): prefix used when naming saved extrapolated maps.
+          - "diffmap_prefix" (str): prefix used for naming difference-map files
+            passed into save_extrapolated_map (forwarded as file_loc_diff).
+        Container with paths and metadata for source files that should be copied
+        alongside the saved maps. Expected keys (each should be a filesystem path
+        or path-like object):
+          - "pdb_dark": path to the PDB/file associated with the dark map.
+          - "pdb_triggered": path to the PDB/file associated with the triggered map.
+          - "map_dark": path to the dark map file.
+          - "map_triggered": path to the triggered map file.
+        Notes:
+          - Missing keys are logged as warnings and skipped.
+          - Permission issues when copying are logged as warnings.
+        Mapping of short name -> extrapolated-map object (or other payload expected
+        by save_extrapolated_map). For each item:
+          - key (str): a descriptive suffix appended to parameters["xtr_prefix"]
+            to form the output name prefix.
+          - value: the extrapolated map or data structure passed as `xtr_value` to
+            save_extrapolated_map.
+        The function iterates over save_dict.items() and calls save_extrapolated_map
+        with (info_container, xtr_value, map_dark, diffmap, folder, name_prefix=..., file_loc_diff=...).
+
+    Returns
+    -------
+    None
+        Files are written as a side effect; nothing is returned.
+
+        If parameters["folder"] exists but is not a directory.
+    PermissionError
+        May be raised by the underlying file operations (copying/writing). Such
+        cases are logged; individual copy failures do not stop processing of other
+        items unless an exception is re-raised by the caller.
+    KeyError
+        If required keys are missing from parameters when accessed; missing
+        info_container entries are handled gracefully (logged and skipped).
+
+    Side effects
+    ------------
+    - Ensures the output folder exists (creates it if necessary).
+    - Copies files referenced in info_container into the output folder.
+    - Calls save_extrapolated_map for each entry in save_dict to persist extrapolated
+      maps and related outputs.
+    - Logs informational, warning, and error messages to the configured logger.
+    """
     folder = Path(parameters["folder"])
     try:
         folder = folder.resolve()
@@ -110,16 +182,19 @@ def save_to_folder(diffmap, map_dark, parameters, info_container, save_dict: dic
             logger.warning(f"{key} not found in info_container, skipping copy.")
         try:
             shutil.copy(info_container[key], folder)
-        except (PermissionError) as e:
-            logger.warning(
-                f"Could not copy {info_container[key]} to {folder}: {e}"
-            )
+        except PermissionError as e:
+            logger.warning(f"Could not copy {info_container[key]} to {folder}: {e}")
         except KeyError as e:
             logger.warning(f"{key} not found in info_container, skipping copy: {e}")
     xtr_name = parameters["xtr_prefix"]
     for name_prefix, xtr_value in save_dict.items():
         prefix = xtr_name + "_" + name_prefix
         save_extrapolated_map(
-            info_container, xtr_value, map_dark, diffmap, folder, name_prefix=prefix, file_loc_diff=parameters['diffmap_prefix']
+            info_container,
+            xtr_value,
+            map_dark,
+            diffmap,
+            folder,
+            name_prefix=prefix,
+            file_loc_diff=parameters["diffmap_prefix"],
         )
-
