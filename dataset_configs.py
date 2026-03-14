@@ -32,11 +32,9 @@ def apply_config_rsEGFP2() -> dict:
         name_machine=name_machine,
     )
 
-def load_all_PL(add_light = False) -> list[str]:
+def load_all_PL_paths(add_light = False) -> list[str]:
     homepath = load_homepath()
     folderloc = homepath + "data/photolyase/"
-    dataloc_dark = folderloc + "1_superdark/superdark_deposit.mtz"
-    pdbloc_dark = folderloc + "1_superdark/superdark_deposit.pdb"
     datalocs_light = []
     folders = (os.listdir(folderloc))
     changing_bits = []
@@ -288,7 +286,7 @@ def get_folders_B12(print_it=False):
             print(idx,f)
     return diffmap_locs
 
-def apply_config_B12_general(idx: str) -> dict:
+def apply_config_B12_general(idx: int) -> dict:
     homepath = load_homepath()
     folderloc = homepath + "data/b12_sacla/"
     dataloc_dark = folderloc + "9S06_dark.mtz"
@@ -410,7 +408,7 @@ def get_all_configs() -> list[dict]:
     return configs
 
 def get_all_PL_configs(get_diff=False) -> list[dict]:
-    bits = load_all_PL()
+    bits = load_all_PL_paths()
     configs  = []
     import numpy as np
     

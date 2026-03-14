@@ -145,10 +145,10 @@ def _create_plot_v2(
     # 1. Plot Trends (Mean + Error Bands)
     ax.plot(-threshs, means, label="Weighted mean", color="blue")
     min_uncertainty_idx = np.argmin(stds + stability)
-    optimal_uncertainty = [
-        -(means[min_uncertainty_idx] - stds[min_uncertainty_idx]),
-        means[min_uncertainty_idx] + stds[min_uncertainty_idx],
-    ]
+    # optimal_uncertainty = [
+    #     -(means[min_uncertainty_idx] - stds[min_uncertainty_idx]),
+    #     means[min_uncertainty_idx] + stds[min_uncertainty_idx],
+    # ]
     # ax.plot(
     #     [-threshs[min_uncertainty_idx],]*2,
     #     optimal_uncertainty,
@@ -580,9 +580,9 @@ def create_plot_v3(stats, cummean_dict, extra_info={}, ax=None, plot_config={}):
         if plot_config.get("comparison_to_reference", False):
             text += f"\nReference: {plot_config['comparison_to_reference']['value']:.3f} (1/{1/plot_config['comparison_to_reference']['value']:.1f})"
         if np.min(pseudo_range)<middle_mean - plot_stats['middle_std'] and False:
-            text += f"\nWarning: Min. est. less than\n1 std. dev. than reported est."
+            text += "\nWarning: Min. est. less than\n1 std. dev. than reported est."
         if np.max(pseudo_range)>middle_mean + plot_stats['middle_std'] and False:
-            text += f"\nWarning: Max. est. more than\n1 std. dev. than reported est."
+            text += "\nWarning: Max. est. more than\n1 std. dev. than reported est."
         # text += f"\nMin-Max Variation: {plot_stats['variation_range']:.1%}"
         # text += f"\n Estimation Range: {plot_stats['estimation_range']:.0%}"
         # place legend like box in top right corner
@@ -649,9 +649,5 @@ def plot_extrapolation_estimate_new(
     #     stats_data["pseudo_occupancy"],
     #     stats_data["weight"],
     # )
-    extra_info = {
-        "multiplicity": len(map_dark.spacegroup.operations()), # type: ignore 
-    }
-
     # 5. Visualization
     return create_plot_v3(stats_data, cummean_dict, plot_config=config["plot"], ax=ax)
