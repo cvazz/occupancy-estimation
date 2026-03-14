@@ -108,16 +108,18 @@ def calculate_diffmaps(
         elif os.path.exists(meta_loc) and not overwrite_solution:
             with open(meta_loc, "rb") as f:
                 meta = pickle.load(f)
+                logger.warning("Loaded meta from file:")
             # Extract the optimal parameters
             opt_k = (
                 meta.k_parameter_optimization.optimal_parameter_value
                 if meta.k_parameter_optimization
                 else None
             )
-            opt_tv = meta.tv_weight_optmization.optimal_parameter_value
-            logger.info(
-                f"loading: {opt_k}, tv_weight: {opt_tv}, only_kweighted: {only_kweighted}"
-            )
+            if not only_kweighted:
+                opt_tv = meta.tv_weight_optimization.optimal_parameter_value
+                logger.info(
+                    f"loading: {opt_k}, tv_weight: {opt_tv}, only_kweighted: {only_kweighted}"
+                )
         else:
             raise ValueError("No parameters provided and no meta file found.")
 
@@ -179,7 +181,12 @@ def get_meta_loc_diffmap(general_config):
 
 
 def combined_diffmap_calc(
-    map_dark, map_triggered, map_dark_comp, processing_config:dict, general_config=None, allow_saving=False
+    map_dark,
+    map_triggered,
+    map_dark_comp,
+    processing_config: dict,
+    general_config=None,
+    allow_saving=False,
 ) -> rsmap.Map:
     diffmap_type = processing_config["diffmap_type"]
     filepath = Path(diffmap_file_name(processing_config, general_config))
@@ -195,23 +202,24 @@ def combined_diffmap_calc(
             f"No recent preprocessed diffmap found at {filepath}, calculating diffmap..."
         )
 
+    meta_loc = get_meta_loc_diffmap(general_config, processing_config)
+
     match diffmap_type:
         case "kweighted":
-            meta_loc = get_meta_loc_diffmap(general_config)
             diffmap = calculate_diffmaps(
                 map_dark, map_triggered, map_dark_comp, meta_loc, only_kweighted=True
             )
         case "tv":
-            meta_loc = get_meta_loc_diffmap(general_config)
             diffmap = calculate_diffmaps(
                 map_dark, map_triggered, map_dark_comp, meta_loc, only_kweighted=False
             )
         case "vanilla":
             diffmap = compute_difference_map(derivative=map_triggered, native=map_dark)
         case _:
-            logger.warning(
-                f"Unknown or unset diffmap_type: {diffmap_type}, defaulting to vanilla"
-            )
+            raise ValueError(f"Unknown diffmap_type: {diffmap_type}")
+            # logger.warning(
+            #     f"Unknown or unset diffmap_type: {diffmap_type}, defaulting to vanilla"
+            # )
             diffmap = compute_difference_map(derivative=map_triggered, native=map_dark)
     if allow_saving:
         diffmap.write_mtz(filepath)
@@ -319,16 +327,12 @@ def error_metric_for_scaling(
     d_spacings = map_temp.compute_dHKL()
     low_res_idx = d_spacings > dmin
 
-    f_model = map_temp.amplitudes[low_res_idx]
-    f_obs = map_exp.amplitudes[low_res_idx]
-
     # Calculate optimal scaling using meteor's internal function
-    f_model_scaled = compute_scale_factors(
-        reference_values=f_obs, values_to_scale=f_model
-    )
+    map_scaled = scale_maps(reference_map=map_temp, map_to_scale=map_exp)
 
     # Compute Mean Absolute Error
-    absdiff = np.abs(f_obs - f_model_scaled)
+    absdiff = np.abs((map_scaled.amplitudes - map_temp.amplitudes)[low_res_idx])
+    # absdiff = np.abs(f_obs - f_model_scaled)
     return np.mean(absdiff)
 
 
@@ -372,7 +376,7 @@ def calculate_rho_bulk(
         # 2. Convert to reciprocal map
         map_temp = rsmap.Map.from_3d_numpy_map(
             temp_data, cell=cell, spacegroup=spacegroup, high_resolution_limit=hs_limit
-        )
+        ) # type: ignore
 
         # 3. Align indices to experimental map
         shared_indices = map_temp.index.intersection(map_exp.index)
@@ -436,8 +440,8 @@ def estimate_absolute_densities(
     print(f"--- Calibrating Absolute Densities for {pdb_file} ---")
 
     # 1. Extract metadata and numpy representations
-    cell = map_model.cell
-    spacegroup = map_model.spacegroup
+    cell: gemmi.UnitCell = map_model.cell  # type: ignore
+    spacegroup: gemmi.SpaceGroup = map_model.spacegroup  # type: ignore
     map_model_np = map_model.to_3d_numpy_map(map_sampling=3)
     map_exp_np = map_exp.to_3d_numpy_map(map_sampling=3)
     grid_shape = map_model_np.shape
@@ -469,7 +473,7 @@ def estimate_absolute_densities(
     rho_comb = rho_atom + share_solvent * rho_bulk
     f000 = rho_comb * cell.volume
 
-    print("\n--- Calibration Complete ---")
+    logger.info("\n--- Calibration Complete ---")
     return {
         "rho_abs_shift": rho_atom_shift,
         "rho_atom": rho_atom,
@@ -495,13 +499,17 @@ def autoshift_rsmap(
         plot=diagnostic_plots,
     )
     if np.abs(estimates["rho_abs_shift"] - estimates["rho_comb"]) > 0.01:
-        logger.warning(
-            f"Estimated rho_atom shift ({estimates['rho_abs_shift']:.4f}) and combined rho (rho_atom + share_solvent * rho_bulk) ({estimates['rho_comb']:.4f}) differ by more than 0.01 e-/Å³. This may indicate an issue with the estimation or the maps."
-        )
+        log_txt = f"Estimated rho_atom shift ({estimates['rho_abs_shift']:.4f}) "
+        log_txt += f"and combined rho (rho_atom + share_solvent * rho_bulk) ({estimates['rho_comb']:.4f} "
+        log_txt += f"{estimates['rho_atom']:.4f}+{estimates['share_solvent']:.4f}*{estimates['rho_bulk']:.4f}) "
+        log_txt += "differ by more than 0.01 e-/Å³. This may indicate an issue with the estimation or the maps."
+        logger.warning(log_txt)
     else:
-        logger.info(
-            f"Estimated rho_atom shift ({estimates['rho_abs_shift']:.4f}) and combined rho (rho_atom + share_solvent * rho_bulk) ({estimates['rho_comb']:.4f}) differ by more than 0.01 e-/Å³. This may indicate an issue with the estimation or the maps."
-        )
+        log_txt = f"Estimated rho_atom shift ({estimates['rho_abs_shift']:.4f}) "
+        log_txt += f"and combined rho (rho_atom + share_solvent * rho_bulk) ({estimates['rho_comb']:.4f} "
+        log_txt += f"{estimates['rho_atom']:.4f}+{estimates['share_solvent']:.4f}*{estimates['rho_bulk']:.4f}) "
+        logger.info(log_txt)
+
     zero_freq = estimates["f000"]
     map_in.loc[(0, 0, 0)] = {
         map_in.amplitude_column_name: zero_freq,
@@ -554,9 +562,9 @@ def prepare_maps(
                 map_dark,
                 map_triggered,
                 map_dark_comp,
-                processing_config=config["map_processing"] | {"diffmap_type": "vanilla"},
+                processing_config=config["map_processing"] | {"preprocessing": True},
                 general_config=config["general"],
-                allow_saving=False
+                allow_saving=False,
             )
             diffmap_temp_np = diffmap_temp.to_3d_numpy_map(
                 map_sampling=config["general"]["map_sampling"]
@@ -598,11 +606,13 @@ def prepare_maps(
             map_dark_comp,
             processing_config=config["map_processing"],
             general_config=config["general"],
-            allow_saving=True
+            allow_saving=True,
         )
     else:
         if config["map_processing"]["dark_mean_correction"]:
-            diffmap = diffmap_temp  # type: ignore
+            if diffmap_temp is None:
+                raise ValueError("Diffmap temp not calculated but needed for dark mean correction")
+            diffmap = diffmap_temp  
         else:
             raise ValueError("Diffmap not defined")
     try:
