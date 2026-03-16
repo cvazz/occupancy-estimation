@@ -450,6 +450,34 @@ def cummean_and_errors(stats_data, leng_shown=None, number_sym_ops=1, plot_confi
     }
 
 
+def compact_v3(cummean_dict,  plot_config={}):
+    std_cutoff = plot_config.get("std_cutoff", 3.0)
+    thresh_line = cummean_dict["thresh_line"]
+    average_distance_mask = (
+        cummean_dict["pseudo_sort"] + std_cutoff * cummean_dict["pseudo_std"]
+        > thresh_line
+    )
+    bottom_index = 0
+    if np.any(average_distance_mask):
+        bottom_index = np.where(average_distance_mask)[0][0]
+
+    min_size_middle = 10
+    is_there_a_middle = bottom_index > 0 and min_size_middle < bottom_index
+    if is_there_a_middle:
+        middle_diff = (
+            cummean_dict["diff_sigma"][bottom_index] + cummean_dict["diff_sigma"][0]
+        ) / 2
+        middle_index = np.where(middle_diff > cummean_dict["diff_sigma"])[0][0]
+        middle_index = max(middle_index, min_size_middle)
+        middle_mean = cummean_dict["pseudo_sort"][middle_index]
+        middle_diff = -cummean_dict["diff_sigma"][middle_index]
+        return middle_mean, cummean_dict["pseudo_std"][middle_index]
+    # elif bottom_index > -1:
+    #     return cummean_dict["pseudo_sort"][bottom_index], cummean_dict["pseudo_std"][bottom_index]
+    else:       
+        return np.nan, np.nan
+
+
 def create_plot_v3(stats, cummean_dict, extra_info={}, ax=None, plot_config={}):
     std_cutoff = plot_config.get("std_cutoff", 3.0)
     markersize = plot_config.get("markersize", 1)
@@ -634,7 +662,8 @@ def plot_extrapolation_estimate_new(
     inclusion_mask: np.ndarray,
     config: dict,
     ax: Axes | None = None,
-) -> tuple[Figure, Axes]:
+    compact: bool = False,
+) -> tuple[Figure, Axes] | tuple[float, float]:
     general_config = config["general"]
 
     diffmap_np = diffmap.to_3d_numpy_map(map_sampling=general_config["map_sampling"])
@@ -650,4 +679,6 @@ def plot_extrapolation_estimate_new(
     #     stats_data["weight"],
     # )
     # 5. Visualization
+    if compact:
+        return compact_v3(cummean_dict, plot_config=config["plot"])
     return create_plot_v3(stats_data, cummean_dict, plot_config=config["plot"], ax=ax)
