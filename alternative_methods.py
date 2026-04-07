@@ -1,17 +1,27 @@
 import numpy as np
 import matplotlib.pyplot as plt
 from scipy import stats
+import copy 
 import gemmi
-import numpy as np
 import pickle
 import warnings
-from pathlib import Path
+import shutil
 import reciprocalspaceship as rs
+from multiprocessing import Pool
+from functools import partial
+import pandas as pd
+
+from matplotlib.ticker import MaxNLocator
+
 from meteor import rsmap
 from meteor.sfcalc import gemmi_structure_to_calculated_map
-from configuration import load_homepath
-from configuration import get_file_config
+from meteor.utils import cut_resolution
+
+from configuration import load_homepath, minimal_masking_config
+from configuration import get_file_config_diff_only
 from logger import setup_logger
+from masking import make_inclusion_mask
+from estimation import plot_extrapolation_estimate_new
 
 logger = setup_logger()
 
@@ -51,6 +61,7 @@ def find_folder(folder_cond):
 ########################## Negative Sum Explosion ##############################
 
 
+
 def get_fits2(neg_sum, alpha_invs, n_largest, return_all=False):
     a_sorted = np.argsort(alpha_invs)
     m_lowest = a_sorted <= n_largest
@@ -61,10 +72,13 @@ def get_fits2(neg_sum, alpha_invs, n_largest, return_all=False):
     fit_lowest = res_lowest.intercept + res_lowest.slope * alpha_invs
     fit_biggest = res_biggest.intercept + res_biggest.slope * alpha_invs
 
-    # intersection = (res_2.tercept-res_1.intercept) / (res_1.slope-res_2.slope)
-    intersection = (res_biggest.intercept - res_lowest.intercept) / (
-        res_lowest.slope - res_biggest.slope
-    )
+# intersection = (res_2.tercept-res_1.intercept) / (res_1.slope-res_2.slope)
+    if np.isclose(res_lowest.slope, res_biggest.slope):
+        intersection = np.nan
+    else:
+        intersection = (res_biggest.intercept - res_lowest.intercept) / (
+            res_lowest.slope - res_biggest.slope
+        )
     intersection_y = res_biggest.intercept + res_biggest.slope * intersection
     highest_low = np.max(alpha_invs[m_lowest])
     lowest_high = np.min(alpha_invs[m_biggest])
@@ -146,6 +160,7 @@ def plot_negative_density_trends(
     fit_lowest2, fit_biggest2, intersect, intersect_y = get_fits2(
         -neg_dens_fit, xtr_range_fit, 3, return_all=True
     )
+    fit_text += f" {intersect:.2f} (i.e. {1/intersect:.2f})"
     ax.plot(xtr_range_fit, fit_lowest2, "--", color=color)
     ax.plot(
         xtr_range_fit,
@@ -160,7 +175,7 @@ def plot_negative_density_trends(
         s=200,
         facecolor="none",
         color="brown",
-        label=f"Intersection at {intersect:.2f} (i.e. {1/intersect:.2f})",
+        label="Intersection",
     )
     if figargs.get("legend", False):
         ax.legend(loc="upper left")
@@ -170,6 +185,8 @@ def plot_negative_density_trends(
     ax.set_ylabel("Negative density sum")
     xmax = np.max(xtr_range_plot) * 1.1
     ymax = np.max(-neg_dens_plot) * 1.1
+    ymax = max(ymax, intersect_y * 2)
+    xmax = max(xmax, intersect * 1.2)
     ax.set_xlim(0, xmax)
     ax.set_ylim(-ymax / 50, ymax)
     return fig, ax
@@ -178,8 +195,8 @@ def plot_negative_density_trends(
 def nse_analysis(diffmap, map_dark, inclusion_mask, figargs={}, ax=None):
     diffmap_np = diffmap.to_3d_numpy_map(map_sampling=3)
     map_dark_np = map_dark.to_3d_numpy_map(map_sampling=3)
-
-    xtr_range_show = np.arange(1, 15)
+    xtr_show_max = figargs.get("xtr_show_max", 15)
+    xtr_range_show = np.arange(1, xtr_show_max + 1)
     xtr_range_fit = np.concatenate(
         (np.linspace(1.4, 0.8, 8), xtr_range_show, np.linspace(50, 80, 8))
     )
@@ -196,13 +213,12 @@ def nse_analysis(diffmap, map_dark, inclusion_mask, figargs={}, ax=None):
         neg_density_plot, neg_density_fit, figargs, ax=ax
     )
 
+
 def compact_nse(diffmap, map_dark, inclusion_mask, figargs={}, ax=None):
     diffmap_np = diffmap.to_3d_numpy_map(map_sampling=3)
     map_dark_np = map_dark.to_3d_numpy_map(map_sampling=3)
 
-    xtr_range_fit = np.concatenate(
-        (np.linspace(1.4, 0.8, 8), np.linspace(50, 80, 8))
-    )
+    xtr_range_fit = np.concatenate((np.linspace(1.4, 0.8, 8), np.linspace(50, 80, 8)))
     neg_density_fit = _calculate_negative_density_trends(
         diffmap_np, map_dark_np, inclusion_mask, xtr_range_fit
     )
@@ -210,6 +226,8 @@ def compact_nse(diffmap, map_dark, inclusion_mask, figargs={}, ax=None):
         -neg_density_fit["neg_dens"], neg_density_fit["xtr_range"], 3, return_all=True
     )
     return 1 / intersect
+
+
 ################################ PANDDA ########################################
 def _calculate_pandda(diffmap_np, map_dark_np, mask_np):
     """
@@ -359,48 +377,31 @@ def replot_xtrapol8(data, axes=None):
     else:
         fig = None
     ax = axes
-    ax.plot(occupancies, pos_features, "o", color="green", label="Positive features")
-    ax.plot(
-        occupancies,
-        neg_features,
-        "s",
-        markersize=5,
-        color="red",
-        label="Negative features",
+    pos_feature_kwarg = dict(marker="o", color="green", label="Positive features")
+    neg_feature_kwarg = dict(
+        marker="s", color="red", label="Negative features", markersize=5
     )
-    ax.plot(
-        occupancies,
-        all_features,
-        "^",
-        color="k",
-        label=f"All features: Peak at {occ:.2f}",
+    all_feature_kwarg = dict(
+        marker="^", color="k", label=f"All features: Peak at {occ:.2f}"
     )
+
+    ax.plot(occupancies, pos_features, **pos_feature_kwarg)
+    ax.plot(occupancies, neg_features, **neg_feature_kwarg)
+    ax.plot(occupancies, all_features, **all_feature_kwarg)
+    # "^",
+    # color="k",
+    # label=f"All features: Peak at {occ:.2f}",
     mask = np.isclose(occupancies, occ)
-    ax.scatter(
-        occupancies[mask],
-        all_features[mask],
-        s=200,
-        facecolor="none",
-        color="brown",
-    )
+    correct_occ_kwarg = dict(s=200, facecolor="none", color="brown")
+
+    ax.scatter(occupancies[mask], all_features[mask], **correct_occ_kwarg)
     mask = np.isclose(occupancies, occ_CC)
-    ax.scatter(
-        occupancies[mask],
-        np.array(pearsonCC)[mask],
-        s=200,
-        facecolor="none",
-        color="brown",
-    )
+    ax.scatter(occupancies[mask], np.array(pearsonCC)[mask], **correct_occ_kwarg)
     ax.set_xlabel("Triggered state occupancy")
     ax.set_ylabel("Normalized difference map signal")
 
-    ax.plot(
-        occupancies,
-        pearsonCC,
-        "X",
-        color="blue",
-        label=f"PearsonCC: Peak at {occ_CC:.2f}",
-    )
+    cc_kwarg = dict(marker="X", color="blue", label=f"PearsonCC: Peak at {occ_CC:.2f}")
+    ax.plot(occupancies, pearsonCC, **cc_kwarg)
     ax.set_xlabel("Triggered state occupancy")
     delta_occupancy = 0.05 * np.max(occupancies)
     ax.set_xlim(
@@ -409,3 +410,360 @@ def replot_xtrapol8(data, axes=None):
     ax.legend()
     # ax = axes.twinx()
     return fig, axes
+
+
+
+
+################################################################################
+
+def cleanup_data(folder_path):
+    actual_folder = list(folder_path.keys())[0]
+    print("Cleaning up data for folder: ", actual_folder)
+    difference_mtz = load_homepath() + "occupancy-estimation/" + actual_folder + "run/x8x8x8_mFoFo.mtz"
+    filepaths = [difference_mtz]
+    out_folder = load_homepath() + "occupancy-estimation/" + actual_folder
+    for ending in ['pickle', 'png', 'pdf']:
+        file_path = load_homepath() + "occupancy-estimation/" + actual_folder + "run/alpha_occupancy_determination_Fextr." + ending
+        filepaths.append(file_path)
+    for file_path in filepaths:
+        shutil.copy(file_path, out_folder)
+    run_folder = load_homepath() + "occupancy-estimation/" + actual_folder + "run/"
+    shutil.rmtree(run_folder)
+
+    # Path(run_folder).unlink()
+    
+
+
+def prepare_data(folder_path, reference_pdb, dmin):
+    actual_folder = list(folder_path.keys())[0]
+    options = folder_path[actual_folder]
+    reference_mtz = load_homepath() + "occupancy-estimation/" + actual_folder + "map_dark.mtz"
+    difference_mtz = load_homepath() + "occupancy-estimation/" + actual_folder + "x8x8x8_mFoFo.mtz"
+
+    name_machine = "sim_rsEFGP2"
+
+    col_dict = {
+        "amplitude_column": "F",
+        "phase_column": "PHIC",
+        "uncertainty_column": "SIGF",
+    }
+    config = get_file_config_diff_only(
+        reference_mtz,
+        difference_mtz,
+        reference_pdb,
+        col_dict,
+        col_dict,
+        name_machine = name_machine,
+        high_resolution_limit=dmin,
+    )
+    struc_dark = gemmi.read_pdb(reference_pdb)
+    map_dark_comp = gemmi_structure_to_calculated_map(
+        struc_dark, high_resolution_limit=dmin,
+    )
+    # config["diffmap_path"] = diffmap_path
+    config["masking"]["exclude_large_occupancy_outliers"]= False
+    config["masking"]["dark_size_threshold"]= -1
+
+    ds_dark = rs.read_mtz(reference_mtz)
+    ds_dark["PHIC"] = map_dark_comp.phases
+
+    map_dark = rsmap.Map(ds_dark, amplitude_column="F", phase_column="PHIC") # type: ignore
+    comp_F000 = map_dark_comp.loc[(0,0,0), "F"]
+    map_dark.loc[(0,0,0), ["F", "PHIC"]] = [comp_F000, 0]
+    map_dark = cut_resolution(map_dark, high_resolution_limit=dmin)
+    map_dark.sort_index(inplace=True)
+
+    ds_diff = rs.read_mtz(difference_mtz)
+    diffmap_columns = dict(amplitude_column="FOFOWT", phase_column="PHIFOFOWT")
+    diffmap = rsmap.Map(ds_diff, **diffmap_columns) # type: ignore
+
+
+    xtrapolate_pickle = load_homepath() + "occupancy-estimation/" + actual_folder + "alpha_occupancy_determination_Fextr.pickle"
+    data = load_xtrapol8_data(xtrapolate_pickle)
+    output = {
+        "config": config,
+        "map_dark": map_dark,
+        "diffmap": diffmap,
+        "xtrapolate_data": data,
+        "options": options,
+    }
+    return output
+
+def make_figure_vary_inside(input_data):
+    config = input_data["config"]
+    map_dark = input_data["map_dark"]
+    diffmap = input_data["diffmap"]
+    x8_data = input_data["xtrapolate_data"]
+    options = input_data["options"]
+    map_dark_np = map_dark.to_3d_numpy_map(map_sampling=3)
+    diffmap_np = diffmap.to_3d_numpy_map(map_sampling=3)
+    try:
+        inclusion_mask = make_inclusion_mask(diffmap, map_dark, config)
+    except ValueError:
+        inclusion_mask = None
+    config_nse = copy.deepcopy(config)
+    config_nse["masking"] = minimal_masking_config()
+    inclusion_mask_nse = make_inclusion_mask(diffmap, map_dark, config_nse)
+
+    try:
+        pandda_dict = _calculate_pandda(diffmap_np, map_dark_np, inclusion_mask)
+    except ValueError:
+        pandda_dict = _calculate_pandda(diffmap_np, map_dark_np, inclusion_mask_nse)
+
+    pandda_trad, pandda_imp = compact_pandda_results(
+        pandda_dict,
+    )
+    occ, occ_CC = compact_x8(x8_data)
+    try:
+        simple_nse = compact_nse(diffmap, map_dark, inclusion_mask_nse)
+    except (ValueError, RuntimeError):
+        simple_nse = np.nan
+    # if inclusion_mask is not None:
+    try:
+        advanced_nse = compact_nse(
+            diffmap,
+            map_dark,
+            inclusion_mask,
+        )
+    except (ValueError, RuntimeError):
+        advanced_nse = np.nan
+
+    # --------------------------- Cell (1,1): Plot 4 ---------------------------
+    _, _, (vacuum_mean, vacuum_std) = plot_extrapolation_estimate_new(
+        diffmap, map_dark, inclusion_mask_nse, config, compact=True
+    )
+    return {
+        "type": options["noise_type"],
+        "snr": options["snr_factor"],
+        "true_occupancy": options["occupancy_level"],
+        "attempt_no": options["attempt_no"],
+        "panda_trad": pandda_trad,
+        "pandda_imp": pandda_imp,
+        "occ": occ,
+        "occ_CC": occ_CC,
+        "simple_nse": simple_nse,
+        "advanced_nse": advanced_nse,
+        "vacuum_mean": vacuum_mean,
+        "vacuum_std": vacuum_std,
+    }
+
+def change_legend_color(ax, figargs):
+    color = figargs['color']
+    ax.tick_params(axis='y', labelcolor=color)
+    ax.spines.left.set_position(("axes", -0))
+    ax.yaxis.set_label_position('left')
+    ax.yaxis.set_ticks_position('left')
+    ylabel = ax.get_ylabel()
+    ax.set_ylabel("")
+    ax.yaxis.set_major_locator(MaxNLocator(nbins=3))
+    return ylabel
+def reduce_legends(axs):
+    handles = []        
+    labels = []
+    for ax_in in axs:
+        handle, label = ax_in.get_legend_handles_labels() 
+        handles.extend(handle)
+        labels.extend(label)
+        if ax_in.legend_:
+            ax_in.legend_.remove()
+    sorted_pairs = dict(sorted(zip(labels, handles), key=lambda x: x[0]))
+    # hl = dict(zip(labels, handles))
+
+    axs[0].legend(sorted_pairs.values(), sorted_pairs.keys(), loc="upper left")
+
+def make_comb_nse_figure(nse_data, ax):
+    map_dark = nse_data["map_dark"]
+    diffmap = nse_data["diffmap"]
+    xtr_show_max = nse_data["xtr_show_max"]
+    masking_options = nse_data["masks"]
+    map_dark_no_zero = copy.deepcopy(map_dark)
+    map_dark_no_zero.loc[(0,0,0), "F"] = 0
+    axs = []
+    lab = ""
+    for ii, (mask_settings, mask) in enumerate(masking_options):
+        if ii:
+            ax2 = ax.twinx()
+        else:
+            ax2 = ax
+        figargs=dict(**mask_settings, legend=True, xtr_show_max=xtr_show_max)
+        map_dark_in = map_dark_no_zero if mask_settings["title"] == "Naive" else map_dark
+        nse_analysis(diffmap, map_dark_in, mask, figargs=figargs, ax=ax2)
+        lab = change_legend_color(ax2, figargs)
+        axs.append(ax2)
+    reduce_legends(axs)
+    # figargs=dict(title="Basic Mask", color="orange", xtr_show_max=xtr_show_max)
+    # nse_analysis(diffmap, map_dark, inclusion_mask_nse, figargs=figargs, ax=ax2_twin)
+    ax.set_ylabel(lab, labelpad=20)
+    ax.set_title("Negative Sum Explosion", )
+
+def make_single_figure(input_data):
+    config = input_data["config"]
+    map_dark = input_data["map_dark"]
+    diffmap = input_data["diffmap"]
+    x8_data = input_data["xtrapolate_data"]
+    map_dark_np = map_dark.to_3d_numpy_map(map_sampling=3)
+    diffmap_np = diffmap.to_3d_numpy_map(map_sampling=3)
+    try: 
+        inclusion_mask = make_inclusion_mask(diffmap, map_dark, config)
+    except ValueError:
+        inclusion_mask = None
+    config_nse = copy.deepcopy(config)
+    config_nse["masking"] = minimal_masking_config()
+    inclusion_mask_nse = make_inclusion_mask(diffmap, map_dark, config_nse)
+
+    # 1. Create the main figure
+    fig = plt.figure(figsize=(12, 12))
+    title = "Simulated rsEGFP2\n"
+    occu_level = input_data['options']['occupancy_level']
+    title += f"light state with {occu_level:.0%} occupancy \nand expeccted $\\chi^{{-1}}$ of {occu_level/2:.2f}"
+    # title += f"with {folder_cond['weight']}mFoFo maps"
+    # title += f"\n with {folder_cond['noise_type']} noise"
+    # title += f"\nwith a signal to noise ratio: {folder_cond['snr']}"
+    fig.suptitle(title, fontsize=12)
+
+    # 2. Define the 2x2 outer grid
+    outer_grid = fig.add_gridspec(2, 2, wspace=0.3, hspace=0.3)
+
+    # ------------------------ Cell (0,0): The "Double Plot" -----------------------
+    # We split this specific cell into 2 rows and 1 column
+    inner_grid = outer_grid[0, 0].subgridspec(2, 1, hspace=0.4)
+    ax0_top = fig.add_subplot(inner_grid[0, 0])
+    ax0_bottom = fig.add_subplot(inner_grid[1, 0])
+    ax_pandda= [ax0_top, ax0_bottom]
+    
+    pandda_dict = _calculate_pandda(diffmap_np, map_dark_np, inclusion_mask)
+    _ = plot_pandda_results(pandda_dict, axs = ax_pandda, improved=True)
+    pandda_dict_zero = _calculate_pandda(diffmap_np, map_dark_np-map_dark_np.mean(), inclusion_mask)
+    _ = plot_pandda_results(pandda_dict_zero, axs = ax_pandda, improved=True)
+
+    # --------------------------- Cell (0,1): Plot 2 --------------------------- 
+    ax1 = fig.add_subplot(outer_grid[1, 0])
+    replot_xtrapol8(x8_data, axes=ax1)
+    ax1.set_title("Xtrapol8")
+
+    # --------------------------- Cell (1,0): Plot 3 ---------------------------
+    ax2 = fig.add_subplot(outer_grid[0, 1])
+    inclusion_mask_none = np.ones_like(map_dark.to_3d_numpy_map(map_sampling=3), dtype=bool)
+    nse_data = dict(
+        map_dark = map_dark,
+        diffmap = diffmap,
+        xtr_show_max = max(15,2.1/input_data['options']['occupancy_level']),
+        masks = [
+            (dict(title="Vacuum Matching \ninspired Mask", color="blue"), inclusion_mask),
+            (dict(title="Basic Mask", color="orange"), inclusion_mask_nse),
+            (dict(title="Naive", color="green"), inclusion_mask_none),
+        ],
+    )
+    make_comb_nse_figure(nse_data, ax2)
+    # xtr_show_max = 25
+    # figargs=dict(title="Basic Mask", color="orange", xtr_show_max=xtr_show_max)
+    # ax2_twin = ax2.twinx()
+    # nse_analysis(diffmap, map_dark, inclusion_mask_nse, figargs=figargs, ax=ax2_twin)
+    # figargs=dict(title="Vacuum Matching \ninspired Mask", color="blue", legend=True,  xtr_show_max=xtr_show_max)
+    # if inclusion_mask is not None:
+    #     nse_analysis(diffmap, map_dark, inclusion_mask, figargs=figargs, ax=ax2, )
+    # map_dark_no_zero = copy.deepcopy(map_dark)
+    # map_dark_no_zero.loc[(0,0,0), "F"] = 0
+    # inclusion_mask_none = np.ones_like(map_dark.to_3d_numpy_map(map_sampling=3), dtype=bool)
+    # figargs=dict(title="Naive", color="green", legend=True, xtr_show_max=xtr_show_max)
+    # ax2_twin2 = ax2_twin.twinx()
+    # ax2_twin2.tick_params(axis='y', labelcolor='green')
+    # ax2_twin.tick_params(axis='y', labelcolor='orange')
+    # nse_analysis(diffmap, map_dark_no_zero, inclusion_mask_none, figargs=figargs, ax=ax2_twin2)
+    # reduce_legends([ax2, ax2_twin, ax2_twin2])
+
+    # ax2.set_title("Negative Sum Explosion")
+
+    # --------------------------- Cell (1,1): Plot 4 ---------------------------
+    ax3 = fig.add_subplot(outer_grid[1, 1])
+    plot_extrapolation_estimate_new(diffmap, map_dark, inclusion_mask_nse, config, ax3)
+    ax3.set_title("Vacuum Matching")
+    # ax3.set_xlim(0,1)
+    # ax3.set_ylim(0,0.81)
+
+
+    # loc = load_figurepath()
+    # fileloc = loc + name
+    # print('saving to ', fileloc)
+    # fig.savefig(fileloc)
+
+    plt.show()
+
+def make_comb_nse_figure_wrapper(input_data):
+    config = input_data["config"]
+    map_dark = input_data["map_dark"]
+    diffmap = input_data["diffmap"]
+    try: 
+        inclusion_mask = make_inclusion_mask(diffmap, map_dark, config)
+    except ValueError:
+        inclusion_mask = None
+    config_nse = copy.deepcopy(config)
+    config_nse["masking"] = minimal_masking_config()
+    inclusion_mask_nse = make_inclusion_mask(diffmap, map_dark, config_nse)
+    fig,ax2 = plt.subplots()
+    inclusion_mask_none = np.ones_like(map_dark.to_3d_numpy_map(map_sampling=3), dtype=bool)
+    nse_data = dict(
+        map_dark = map_dark,
+        diffmap = diffmap,
+        xtr_show_max = 25,
+        masks = [
+            (dict(title="Vacuum Matching \ninspired Mask", color="blue"), inclusion_mask),
+            (dict(title="Basic Mask", color="orange"), inclusion_mask_nse),
+            (dict(title="Naive", color="green"), inclusion_mask_none),
+        ],
+    )
+    make_comb_nse_figure(nse_data, ax2)
+    fig.tight_layout()
+    plt.show()
+
+def process_single_folder(folder_path, reference_pdb, dmin):
+    """
+    Worker function to process a single folder.
+    Returns a tuple of (output_dict, error_folder_path)
+    """
+    logger_alt = setup_logger()
+    logger_alt.setLevel(40) 
+    logger.setLevel(40)
+    key = list(folder_path.keys())[0]
+    try:
+        print(f"Processing folder: {key}")
+        data = prepare_data(folder_path, reference_pdb, dmin)
+        output = make_figure_vary_inside(data)
+        return output, None
+    
+    except (KeyError, ValueError, FileNotFoundError, RuntimeError) as e:
+        print(f"Failed for {key}: {e}")
+        return None, folder_path
+
+
+def run_parallel_processing(folder_paths, reference_pdb, dmin, num_processes=4, pool_it =True):
+    """
+    Main orchestrator to handle the multiprocessing pool.
+    """
+    # 1. Get paths
+    
+    # 2. Prepare the worker function with fixed arguments
+    worker = partial(process_single_folder, reference_pdb=reference_pdb, dmin=dmin)
+    
+    # 3. Execute Pool
+    if pool_it:
+        with Pool(processes=num_processes) as pool:
+            results = pool.map(worker, folder_paths)
+    else:
+        results = [worker(folder_path) for folder_path in folder_paths]
+    
+    # 4. Aggregate results
+    output_dict_list = [r[0] for r in results if r[0] is not None]
+    failed_list = [r[1] for r in results if r[1] is not None]
+    
+    successes = len(output_dict_list)
+    faileds = len(failed_list)
+    
+    print(f"Successfully processed {successes} and failed on {faileds} folders")
+    
+    # 5. Save and Return
+    if output_dict_list:
+        ds = pd.DataFrame(output_dict_list)
+        return ds
+    
+    return pd.DataFrame()

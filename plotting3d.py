@@ -19,25 +19,8 @@ def get_pos_from_pdb(struc: gemmi.Structure, search_occ=None):
     except ImportError:
         print("install gemmi to use this function")
         raise ImportError
-    prefactors = np.array(
-        [
-            [1, 1, 1],
-            [-1, -1, 1],
-            [1, -1, -1],
-            [-1, 1, -1],
-        ]
-    )
-    translation = (
-        np.array(
-            [
-                [0, 0, 0],
-                [1, 0, 1],
-                [1, 1, 0],
-                [0, 1, 1],
-            ]
-        )
-        / 2
-    )
+    prefactors = np.array([[1, 1, 1], [-1, -1, 1], [1, -1, -1], [-1, 1, -1]])
+    translation = np.array([[0, 0, 0], [1, 0, 1], [1, 1, 0], [0, 1, 1]]) / 2
 
     pos_list = np.array(
         [struc.cell.fractionalize(rca.atom.pos).tolist() for rca in struc[0].all()]
@@ -465,7 +448,7 @@ def difference_map_plot(
         ax.axvline(config.alpha, c="k", linestyle="-.", label="alpha_true")
 
     for ax in axs[1]:
-        ax.axhline( 0, c="k", linewidth=0.5)
+        ax.axhline(0, c="k", linewidth=0.5)
         ax.set_ylabel("Cross Correlation")
         ax.set_xlabel("Alphas")
         ax.set_title("Difference Map (CC) Method")
