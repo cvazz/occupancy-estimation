@@ -57,53 +57,62 @@ def save_extrapolated_map(
     folder,
     name_prefix="",
     file_loc_diff="",
+    rfree_flags=None,
 ):
+    if not diffmap.has_uncertainties:
+        diffmap.set_uncertainties(diffmap.amplitudes.abs() * 0.1, "Estimated_sigmaF")
     xtr_map = adding_maps(map_dark, diffmap, factor2=xtr_factor)
     logger.info(f"Columns of xtr: {xtr_map.columns}")
     file_loc = str(folder / (name_prefix + f"_xtr{xtr_factor:.2f}.mtz"))
+
     # file_loc_dark_again = folder / (name_prefix + "_dark_again.mtz")
     # file_loc = str(folder / (name_prefix + f"_xtr{xtr_factor:.2f}_straight.mtz"))
     if file_loc_diff:
+        file_loc_diff = str(folder / (name_prefix + f"_diffmap{file_loc_diff}.mtz"))
         diffmap.write_mtz(file_loc_diff)
-    xtr_map.write_mtz(file_loc)
+    # xtr_map.write_mtz(file_loc)
     # map_dark.write_mtz(file_loc_dark_again)
-    # logger.info(f"Saving xtr map: {xtr_factor:.2f}, to {file_loc}")
-    # ds_temp = rs.read_mtz(info_container["map_dark"])
-    # if not diffmap.has_uncertainties:
-    #     logger.warning("Diffmap has no uncertainties, adding fake uncertainties of 1.0")
-    #     sigf = rs.DataSeries(np.ones(len(diffmap)), dtype=StandardDeviationDtype)
-    #     diffmap.set_uncertainties(sigf, "Fake_uncertainty")
+    logger.info(f"Saving xtr map: {xtr_factor:.2f}, to {file_loc}")
+    ds_temp = rs.read_mtz(info_container["map_dark"])
+    if not diffmap.has_uncertainties:
+        logger.warning("Diffmap has no uncertainties, adding fake uncertainties of 1.0")
+        sigf = rs.DataSeries(np.ones(len(diffmap)), dtype=StandardDeviationDtype)
+        diffmap.set_uncertainties(sigf, "Fake_uncertainty")
 
-    # col_order = np.concatenate(
-    #     [xtr_map.columns, [col for col in ds_temp.columns if "free" in col]]
-    # )
-    # for col in xtr_map.columns:
-    #     ds_temp[col] = xtr_map[col]
-    # ds_temp = ds_temp[col_order]
-    # logger.info(f"Columns of xtr_map: {xtr_map.columns}")
-    # logger.info(f"Columns of ds_temp: {ds_temp.columns}")
+    col_order = np.concatenate(
+        [xtr_map.columns, [col for col in ds_temp.columns if "free" in col]]
+    )
+    for col in xtr_map.columns:
+        ds_temp[col] = xtr_map[col]
+    ds_temp = ds_temp[col_order]
+    logger.info(f"Columns of xtr_map: {xtr_map.columns}")
+    logger.info(f"Columns of ds_temp: {ds_temp.columns}")
 
-    # mask = np.logical_or(
-    #     (~ds_temp["F"].isna() & ds_temp["SIGF"].isna()),
-    #     (ds_temp["F"].isna() & ~ds_temp["SIGF"].isna()),
-    # )
-    # non_matching_indices = np.sum(np.array(mask))
-    # if non_matching_indices > 0:
-    #     logger.warning(
-    #         f"Number of rows with not shared NaNs in F and SIGF: {non_matching_indices}"
-    #     )
-    #     # ds_temp.drop(mask, inplace=True) # drop rows where only one of F or SIGF is NaN
-    #     ds_temp.loc[mask, xtr_map.columns] = np.nan
+    mask = np.logical_or(
+        (~ds_temp["F"].isna() & ds_temp[xtr_map.uncertainties_column_name].isna()),
+        (ds_temp["F"].isna() & ~ds_temp[xtr_map.uncertainties_column_name].isna()),
+    )
+    non_matching_indices = np.sum(np.array(mask))
+    if non_matching_indices > 0:
+        logger.warning(
+            f"Number of rows with not shared NaNs in F and SIGF: {non_matching_indices}"
+        )
+        # ds_temp.drop(mask, inplace=True) # drop rows where only one of F or SIGF is NaN
+        ds_temp.loc[mask, xtr_map.columns] = np.nan
+    if rfree_flags is not None:
+        ds_temp["Rfree"] = rfree_flags
 
-    # ds_temp.write_mtz(file_loc)
+    ds_temp.write_mtz(file_loc)
+    return file_loc
 
 
 def save_to_folder(
     diffmap: rsmap.Map,
     map_dark: rsmap.Map,
     parameters: dict,
-    info_container: dict,
+    input_file_config: dict,
     save_dict: dict,
+    rfree_flags=None,
 ):
     """ 
     Save generated maps and associated files into a target folder and invoke
@@ -168,7 +177,6 @@ def save_to_folder(
     folder = Path(parameters["folder"])
     try:
         folder = folder.resolve()
-        print(f"Absolute folder path: {folder}")
         if folder.exists() and not folder.is_dir():
             raise NotADirectoryError(f"Path exists and is not a directory: {folder}")
         folder.mkdir(parents=True, exist_ok=True)
@@ -176,25 +184,31 @@ def save_to_folder(
     except Exception as e:
         logger.error(f"Failed to create folder {folder}: {e}")
         raise
-    for key in ["pdb_dark", "pdb_triggered", "map_dark", "map_triggered"]:
-        print(f"Checking for \n{key} copying to {folder}...")
-        if key not in info_container:
-            logger.warning(f"{key} not found in info_container, skipping copy.")
+    for key in ["pdb_dark", "pdb_triggered", "map_dark", "map_triggered", "map_diff"]:
+        logger.info(f"Checking for \n{key} copying to {folder}...")
+        if key not in input_file_config or not input_file_config[key]:
+            logger.warning(f"{key} not found in input_file_config, skipping copy.")
+            continue
         try:
-            shutil.copy(info_container[key], folder)
+            shutil.copy(input_file_config[key], folder)
         except PermissionError as e:
-            logger.warning(f"Could not copy {info_container[key]} to {folder}: {e}")
+            logger.warning(f"Could not copy {input_file_config[key]} to {folder}: {e}")
         except KeyError as e:
-            logger.warning(f"{key} not found in info_container, skipping copy: {e}")
+            logger.warning(f"{key} not found in input_file_config, skipping copy: {e}")
     xtr_name = parameters["xtr_prefix"]
+    filelocs = []
     for name_prefix, xtr_value in save_dict.items():
         prefix = xtr_name + "_" + name_prefix
-        save_extrapolated_map(
-            info_container,
+
+        file_loc = save_extrapolated_map(
+            input_file_config,
             xtr_value,
             map_dark,
             diffmap,
             folder,
             name_prefix=prefix,
-            file_loc_diff=parameters["diffmap_prefix"],
+            file_loc_diff=parameters.get("diffmap_prefix", ""),
+            rfree_flags=rfree_flags,
         )
+        filelocs.append(file_loc)
+    return filelocs
