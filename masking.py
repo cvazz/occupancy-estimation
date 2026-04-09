@@ -1,3 +1,4 @@
+from matplotlib.path import Path
 import numpy as np
 import gemmi
 
@@ -11,14 +12,20 @@ logger = setup_logger()
 
 
 def support_from_masker(
-    pdb_file: str,
+    pdb_file: str | Path | gemmi.Structure,
     grid_shape: tuple,
     radii_set: gemmi.AtomicRadiiSet = gemmi.AtomicRadiiSet.Cctbx,
+    remove_waters: bool = True,
+    options: dict = {},
 ):
 
-    st = gemmi.read_structure(pdb_file)
+    if isinstance(pdb_file, gemmi.Structure):
+        st = pdb_file
+    else:
+        st = gemmi.read_structure(str(pdb_file))
     model = st[0]
-    model.remove_waters()
+    if remove_waters:
+        model.remove_waters()
 
     grid = gemmi.Int8Grid()
 
@@ -39,6 +46,10 @@ def support_from_masker(
 
     # write the solvent mask into our pre-sized grid
     masker = gemmi.SolventMasker(radii_set)
+    if options.get("rprobe", None) is not None:
+        masker.rprobe = options["rprobe"]
+    if options.get("rshrink", None) is not None:
+        masker.rshrink = options["rshrink"]
     # masker.rprobe = 0.5
     # masker.rshrink = 0.5
     masker.put_mask_on_int8_grid(grid, model)

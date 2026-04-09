@@ -31,14 +31,17 @@ logger = setup_logger()
 def convert_ints_to_sf2(
     ds: rs.DataSet, cols: dict, map_dark_comp: rsmap.Map
 ) -> rs.DataSet:
-    ds_ints = ds[cols["ints_column"]]
-    ds_sigi = ds[cols["int_uncertainty_column"]]
-    ds[cols["amplitude_column"]] = np.sqrt(np.abs(ds_ints)) * np.sign(ds_ints)
-    ds[cols["uncertainty_column"]] = np.sqrt(ds_sigi / (2 * np.abs(ds_ints)))
-    ds[cols["phase_column"]] = map_dark_comp.phases
+    # ds_ints = ds[cols["ints_column"]]
+    # ds_sigi = ds[cols["int_uncertainty_column"]]
+    # ds[cols["amplitude_column"]] = np.sqrt(np.abs(ds_ints)) * np.sign(ds_ints)
+    # ds[cols["uncertainty_column"]] = np.sqrt(ds_sigi / (2 * np.abs(ds_ints)))
+    ds2 = rs.algorithms.scale_merged_intensities(ds, cols["ints_column"], cols["int_uncertainty_column"],)# output_columns=(cols["amplitude_column"], cols["uncertainty_column"]))
     cols.pop("ints_column")
     cols.pop("int_uncertainty_column")
-    return ds
+    ds2[cols["amplitude_column"]] = ds2['FW-F']
+    ds2[cols["uncertainty_column"]] = ds2['FW-SIGF']
+    ds2[cols["phase_column"]] = map_dark_comp.phases
+    return ds2
 
 
 def get_maps(input_files_dict: dict) -> tuple[rsmap.Map, rsmap.Map]:
@@ -57,6 +60,19 @@ def get_maps(input_files_dict: dict) -> tuple[rsmap.Map, rsmap.Map]:
         )
         ds_dark = convert_ints_to_sf2(ds_dark, dark_cols, map_dark_comp)
         ds_triggered = convert_ints_to_sf2(ds_triggered, triggered_cols, map_dark_comp)
+    elif input_files_dict["input_files"]["columns_dark"]['phase_column'] == "MODEL":
+        input_files_dict["input_files"]["columns_dark"]['phase_column'] = "PHIC"
+        input_files_dict["input_files"]["columns_triggered"]['phase_column'] = "PHIC"
+        struc = gemmi.read_pdb(input_files_dict["input_files"]["pdb_dark"])
+        map_dark_comp = gemmi_structure_to_calculated_map(
+            struc,
+            high_resolution_limit=input_files_dict["general"]["high_resolution_limit"],
+        )
+        ds_dark["PHIC"] = map_dark_comp.phases
+        ds_triggered["PHIC"] = map_dark_comp.phases
+
+
+
     return get_maps_sf(ds_dark, ds_triggered, input_files_dict)
 
 

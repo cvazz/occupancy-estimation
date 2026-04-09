@@ -29,29 +29,26 @@ def _calculate_statistics(
     basic weights and divisions.
     """
     # Division (Occupancy Factor proxy)
-    pseudo_occupancy = -diffmap_np / map_dark_np
+    solvent_level = -0.
+    pseudo_occupancy = -diffmap_np[mask_np] / (map_dark_np[mask_np] - solvent_level)
+    mask_inv = np.logical_and(~mask_np, map_dark_np != 0)
+    pseudo_occupancy_inv = -diffmap_np[mask_inv] / (map_dark_np[mask_inv] - solvent_level)
 
     weight = np.abs(diffmap_np[mask_np])
 
-    sigma_level  = np.sqrt(np.sum((diffmap_np-np.mean(diffmap_np))**2)/diffmap_np.size)
-    # sigma_level  = np.sqrt(np.sum((diffmap_np-np.mean(diffmap_np))**2)/diffmap_np.size)
+    sigma_level = np.sqrt(
+        np.sum((diffmap_np - np.mean(diffmap_np)) ** 2) / diffmap_np.size
+    )
 
     diffmap_sigma = (diffmap_np - np.mean(diffmap_np)) / sigma_level
-    # diffmap_sigma = (diffmap_np ) / sigma_level
-    diffmap_sigma = (np.abs(diffmap_sigma))*np.sign(diffmap_sigma)
-    # diffmap_sigma = diffmap_np
-
-    # plt.figure()
-    # plt.hist(diffmap_sigma.flatten(), bins=300, alpha=0.5, label="Raw Diffmap")
-    # plt.yscale('log')
-    # plt.show()
+    diffmap_sigma = (np.abs(diffmap_sigma)) * np.sign(diffmap_sigma)
     return {
         "diffmap_raw": diffmap_np[mask_np],
-        "pseudo_occupancy": pseudo_occupancy[mask_np],
+        "pseudo_occupancy": pseudo_occupancy,
         "weight": weight,
         "diffmap_sigma": diffmap_sigma[mask_np],
-        "diffmap_inv": diffmap_sigma[~mask_np],
-        "pseudo_occupancy_inv": pseudo_occupancy[~mask_np],
+        "diffmap_inv": diffmap_sigma[mask_inv],
+        "pseudo_occupancy_inv": pseudo_occupancy_inv,
     }
 
 
@@ -241,7 +238,7 @@ def _create_plot_v2(
     )
     ax.grid()
 
-    return fig, ax # type: ignore
+    return fig, ax  # type: ignore
 
 
 def _create_plot(
@@ -358,7 +355,7 @@ def _create_plot(
     ax.set_ylim(0, None)
     ax.grid()
 
-    return fig, ax # type: ignore
+    return fig, ax  # type: ignore
 
 
 def plot_extrapolation_estimate(
@@ -450,7 +447,7 @@ def cummean_and_errors(stats_data, leng_shown=None, number_sym_ops=1, plot_confi
     }
 
 
-def compact_v3(cummean_dict,  plot_config={}):
+def compact_v3(cummean_dict, plot_config={}):
     std_cutoff = plot_config.get("std_cutoff", 3.0)
     thresh_line = cummean_dict["thresh_line"]
     average_distance_mask = (
@@ -474,11 +471,13 @@ def compact_v3(cummean_dict,  plot_config={}):
         return middle_mean, cummean_dict["pseudo_std"][middle_index]
     # elif bottom_index > -1:
     #     return cummean_dict["pseudo_sort"][bottom_index], cummean_dict["pseudo_std"][bottom_index]
-    else:       
+    else:
         return np.nan, np.nan
 
 
-def create_plot_v3(stats, cummean_dict, extra_info={}, ax=None, plot_config={}):
+def create_plot_v3(
+    stats, cummean_dict, extra_info={}, ax=None, plot_config={}
+) -> tuple[Figure, Axes, tuple[float, float]]:
     std_cutoff = plot_config.get("std_cutoff", 3.0)
     markersize = plot_config.get("markersize", 1)
     thresh_line = cummean_dict["thresh_line"]
@@ -515,8 +514,8 @@ def create_plot_v3(stats, cummean_dict, extra_info={}, ax=None, plot_config={}):
         alpha=0.2,
     )
     ax.plot(
-        -cummean_dict["diff_sigma"][:bottom_index+1],
-        cummean_dict["pseudo_sort"][:bottom_index+1],
+        -cummean_dict["diff_sigma"][: bottom_index + 1],
+        cummean_dict["pseudo_sort"][: bottom_index + 1],
         color="blue",
         label="Cumulative Mean",
     )
@@ -539,7 +538,6 @@ def create_plot_v3(stats, cummean_dict, extra_info={}, ax=None, plot_config={}):
         color="red",
         alpha=0.2,
     )
-
 
     ax.plot(
         [lowest_thresh, 0],
@@ -565,15 +563,16 @@ def create_plot_v3(stats, cummean_dict, extra_info={}, ax=None, plot_config={}):
 
     ############## Optimimum
     stats_kwarg = dict(
-            transform=ax.transAxes,
-            fontsize=10,
-            verticalalignment="top",
-            horizontalalignment="right",
-            bbox=dict(boxstyle="round", facecolor="white", alpha=0.8),
-        )
+        transform=ax.transAxes,
+        fontsize=10,
+        verticalalignment="top",
+        horizontalalignment="right",
+        bbox=dict(boxstyle="round", facecolor="white", alpha=0.8),
+    )
 
     is_there_a_middle = bottom_index > 0 and min_size_middle < bottom_index
     if is_there_a_middle:
+        print(f"Bottom index: {bottom_index}, Is there a middle? {is_there_a_middle}")
         middle_diff = (
             cummean_dict["diff_sigma"][bottom_index] + cummean_dict["diff_sigma"][0]
         ) / 2
@@ -590,8 +589,9 @@ def create_plot_v3(stats, cummean_dict, extra_info={}, ax=None, plot_config={}):
             color="brown",
             label="Optimal",
         )
-        ax.scatter(middle_diff, middle_mean, **optimal_kwargs) # type: ignore
+        ax.scatter(middle_diff, middle_mean, **optimal_kwargs)  # type: ignore
 
+        prediction_tuple = middle_mean, cummean_dict["pseudo_std"][middle_index]
         plot_stats = dict(
             middle_mean=middle_mean,
             middle_std=cummean_dict["pseudo_std"][middle_index],
@@ -607,18 +607,19 @@ def create_plot_v3(stats, cummean_dict, extra_info={}, ax=None, plot_config={}):
         text += f"\nSt. Dev.: {plot_stats['middle_std']:.3f} ({plot_stats['middle_std_rel']:.1%})"
         if plot_config.get("comparison_to_reference", False):
             text += f"\nReference: {plot_config['comparison_to_reference']['value']:.3f} (1/{1/plot_config['comparison_to_reference']['value']:.1f})"
-        if np.min(pseudo_range)<middle_mean - plot_stats['middle_std'] and False:
+        if np.min(pseudo_range) < middle_mean - plot_stats["middle_std"] and False:
             text += "\nWarning: Min. est. less than\n1 std. dev. than reported est."
-        if np.max(pseudo_range)>middle_mean + plot_stats['middle_std'] and False:
+        if np.max(pseudo_range) > middle_mean + plot_stats["middle_std"] and False:
             text += "\nWarning: Max. est. more than\n1 std. dev. than reported est."
         # text += f"\nMin-Max Variation: {plot_stats['variation_range']:.1%}"
         # text += f"\n Estimation Range: {plot_stats['estimation_range']:.0%}"
         # place legend like box in top right corner
-        ax.text(0.95, 0.95, text, **stats_kwarg) # type: ignore
+        ax.text(0.95, 0.95, text, **stats_kwarg)  # type: ignore
 
-    elif bottom_index is not None:
+    else:
         text = "No Prediction because \n estimation range is too small"
-        ax.text(0.95, 0.95, text, **stats_kwarg) # type: ignore
+        ax.text(0.95, 0.95, text, **stats_kwarg)  # type: ignore
+        prediction_tuple = (np.nan, np.nan)
 
     # 4. Formatting
     if not plot_config.get("is_composite", False):
@@ -650,10 +651,9 @@ def create_plot_v3(stats, cummean_dict, extra_info={}, ax=None, plot_config={}):
         ax2.set_xlim((-cummean_dict["diff_sorted"][0]) * 1.1, 0.0)
         ax2.set_xlabel(r"$-\Delta \rho$ (absolute units)")
 
-
     if plot_config.get("set_ylim", False):
         ax.set_ylim(*plot_config["set_ylim"])
-    return fig, ax
+    return fig, ax, prediction_tuple
 
 
 def plot_extrapolation_estimate_new(
@@ -663,7 +663,7 @@ def plot_extrapolation_estimate_new(
     config: dict,
     ax: Axes | None = None,
     compact: bool = False,
-) -> tuple[Figure, Axes] | tuple[float, float]:
+) -> tuple[Figure | None, Axes | None, tuple[float, float]]:
     general_config = config["general"]
 
     diffmap_np = diffmap.to_3d_numpy_map(map_sampling=general_config["map_sampling"])
@@ -680,5 +680,5 @@ def plot_extrapolation_estimate_new(
     # )
     # 5. Visualization
     if compact:
-        return compact_v3(cummean_dict, plot_config=config["plot"])
+        return None, None, compact_v3(cummean_dict, plot_config=config["plot"])
     return create_plot_v3(stats_data, cummean_dict, plot_config=config["plot"], ax=ax)
